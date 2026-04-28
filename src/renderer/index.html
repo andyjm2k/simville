@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simville</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="game-container">
+    <!-- Main HUD -->
+    <div id="hud">
+      <div id="hud-left">
+        <span id="time-display">Day 1, 06:00</span>
+        <span id="season-display">Wet Season</span>
+      </div>
+      <div id="hud-center">
+        <span id="speed-display">Speed: 1x</span>
+        <button id="btn-pause" class="hud-btn" title="Pause (Space)">⏸</button>
+        <button id="btn-chronicle" class="hud-btn" title="Chronicle (L)">📜</button>
+        <button id="btn-build" class="hud-btn" title="Build Menu (B)">🔨</button>
+        <button id="btn-tech" class="hud-btn" title="Technology Tree (T)">🔬</button>
+      </div>
+      <div id="hud-right">
+        <button id="btn-settings" class="hud-btn" title="Settings">⚙️</button>
+      </div>
+    </div>
+
+    <!-- Resource Bar -->
+    <div id="resource-bar">
+      <span class="resource" title="Wood">🪵 <span id="res-wood">0</span></span>
+      <span class="resource" title="Food">🍖 <span id="res-food">0</span></span>
+      <span class="resource" title="Water">💧 <span id="res-water">0</span></span>
+      <span class="resource" title="Stone">🪨 <span id="res-stone">0</span></span>
+      <span class="resource" title="Herbs">🌿 <span id="res-herbs">0</span></span>
+      <span class="resource" title="Clay">🏺 <span id="res-clay">0</span></span>
+      <span class="resource" title="Fish">🐟 <span id="res-fish">0</span></span>
+      <span class="resource" title="Thatch">🌾 <span id="res-thatch">0</span></span>
+      <span class="resource" title="Rare Materials">💎 <span id="res-rare">0</span></span>
+      <span class="population" title="Population">👥 <span id="res-population">6</span></span>
+    </div>
+
+    <!-- Game Canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Minimap -->
+    <div id="minimap-container">
+      <canvas id="minimap-canvas" width="150" height="150"></canvas>
+    </div>
+
+    <!-- Villager Detail Panel -->
+    <div id="villager-panel" class="panel hidden">
+      <div class="panel-header">
+        <span id="villager-name">Villager</span>
+        <button class="btn-close" data-close="villager-panel">×</button>
+      </div>
+      <div class="panel-content">
+        <div id="villager-portrait">
+          <div id="villager-sprite"></div>
+          <div id="villager-title"></div>
+        </div>
+        <div id="villager-stats">
+          <div id="villager-skills"></div>
+          <div id="villager-mood"></div>
+          <div id="villager-status"></div>
+          <div id="villager-needs"></div>
+        </div>
+        <div id="villager-activity">
+          <h4>Current Activity</h4>
+          <p id="villager-activity-text">Idle...</p>
+        </div>
+        <div id="villager-interactions">
+          <h4>Latest Interactions</h4>
+          <ul id="villager-interaction-list"></ul>
+        </div>
+        <div id="villager-family">
+          <h4>Family & Bonds</h4>
+          <ul id="villager-family-list"></ul>
+        </div>
+        <div id="villager-goals">
+          <h4>Personal Goals</h4>
+          <ul id="villager-goals-list"></ul>
+        </div>
+        <div id="villager-secrets">
+          <h4>Secrets <span id="secrets-count">(0)</span></h4>
+          <ul id="villager-secrets-list"></ul>
+        </div>
+        <div id="villager-backstory">
+          <h4>Backstory</h4>
+          <p id="villager-backstory-text"></p>
+        </div>
+      </div>
+      <div class="panel-footer">
+        <button class="btn-secondary" id="btn-assign-task">Assign Task</button>
+      </div>
+    </div>
+
+    <!-- Build Menu -->
+    <div id="build-menu" class="panel hidden">
+      <div class="panel-header">
+        <span>Build Menu</span>
+        <button class="btn-close" data-close="build-menu">×</button>
+      </div>
+      <div class="panel-content">
+        <div id="build-grid"></div>
+      </div>
+    </div>
+
+    <!-- Chronicle Panel -->
+    <div id="chronicle-panel" class="panel hidden">
+      <div class="panel-header">
+        <span>Village Chronicle</span>
+        <button class="btn-close" data-close="chronicle-panel">×</button>
+      </div>
+      <div class="panel-content">
+        <div id="chronicle-legendary">
+          <h4>📖 Legends</h4>
+          <ul id="chronicle-legendary-list"></ul>
+        </div>
+        <div id="chronicle-rules">
+          <h4>Fireside Rules</h4>
+          <ul id="chronicle-rule-list"></ul>
+        </div>
+        <div id="chronicle-entries">
+          <h4>Recent Entries</h4>
+          <ul id="chronicle-entry-list"></ul>
+        </div>
+      </div>
+      <div class="panel-footer">
+        <button class="btn-secondary" id="btn-chronicle-prev">← Prev</button>
+        <span id="chronicle-page">Page 1</span>
+        <button class="btn-secondary" id="btn-chronicle-next">Next →</button>
+      </div>
+    </div>
+
+    <!-- Technology Panel -->
+    <div id="tech-panel" class="panel hidden">
+      <div class="panel-header">
+        <span>Technology Tree</span>
+        <button class="btn-close" data-close="tech-panel">×</button>
+      </div>
+      <div class="panel-content">
+        <div id="tech-current-research">
+          <h4>Currently Researching</h4>
+          <div id="tech-research-info">None</div>
+        </div>
+        <div id="tech-available">
+          <h4>Available Technologies</h4>
+          <div id="tech-available-list"></div>
+        </div>
+        <div id="tech-researched">
+          <h4>Discovered Technologies</h4>
+          <div id="tech-researched-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Panel -->
+    <div id="settings-panel" class="panel hidden">
+      <div class="panel-header">
+        <span>Settings</span>
+        <button class="btn-close" data-close="settings-panel">×</button>
+      </div>
+      <div class="panel-content">
+        <div class="settings-section">
+          <h4>LLM Configuration</h4>
+          <div class="form-group">
+            <label for="setting-endpoint">Endpoint</label>
+            <input type="text" id="setting-endpoint" placeholder="https://api.openai.com/v1">
+          </div>
+          <div class="form-group">
+            <label for="setting-model">Model</label>
+            <input type="text" id="setting-model" placeholder="gpt-4o-mini">
+          </div>
+          <div class="form-group">
+            <label for="setting-apikey">API Key</label>
+            <input type="password" id="setting-apikey" placeholder="sk-...">
+          </div>
+          <div class="form-group">
+            <label for="setting-tokens">Max Tokens</label>
+            <input type="number" id="setting-tokens" min="100" max="2000" value="500">
+          </div>
+          <div class="form-group">
+            <label for="setting-temperature">Temperature</label>
+            <input type="range" id="setting-temperature" min="0" max="1" step="0.1" value="0.8">
+            <span id="temp-value">0.8</span>
+          </div>
+          <button class="btn-primary" id="btn-test-connection">Test Connection</button>
+          <p id="connection-status"></p>
+        </div>
+
+        <div class="settings-section">
+          <h4>Simulation</h4>
+          <div class="form-group">
+            <label for="setting-daylength">Day Length (minutes)</label>
+            <input type="number" id="setting-daylength" min="5" max="30" value="10">
+          </div>
+          <div class="form-group">
+            <label for="setting-worldsize">World Size</label>
+            <select id="setting-worldsize">
+              <option value="32">Small (32x32)</option>
+              <option value="64" selected>Medium (64x64)</option>
+              <option value="96">Large (96x96)</option>
+              <option value="128">Huge (128x128)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h4>Graphics</h4>
+          <div class="form-group checkbox">
+            <input type="checkbox" id="setting-labels" checked>
+            <label for="setting-labels">Show Name Labels</label>
+          </div>
+          <div class="form-group checkbox">
+            <input type="checkbox" id="setting-bubbles" checked>
+            <label for="setting-bubbles">Show Speech Bubbles</label>
+          </div>
+          <div class="form-group checkbox">
+            <input type="checkbox" id="setting-lighting" checked>
+            <label for="setting-lighting">Lighting Effects</label>
+          </div>
+          <div class="form-group checkbox">
+            <input type="checkbox" id="setting-particles" checked>
+            <label for="setting-particles">Particle Effects</label>
+          </div>
+        </div>
+      </div>
+      <div class="panel-footer">
+        <button class="btn-secondary" id="btn-settings-cancel">Cancel</button>
+        <button class="btn-primary" id="btn-settings-save">Save</button>
+      </div>
+    </div>
+
+    <!-- Load Game Dialog -->
+    <div id="load-dialog" class="dialog hidden">
+      <div class="dialog-content">
+        <div class="dialog-header">
+          <span>Load Game</span>
+          <button class="btn-close" data-close="load-dialog">×</button>
+        </div>
+        <div class="dialog-content">
+          <ul id="save-list"></ul>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn-secondary" data-close="load-dialog">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- New World Dialog -->
+    <div id="newworld-dialog" class="dialog hidden">
+      <div class="dialog-content">
+        <div class="dialog-header">
+          <span>New World</span>
+          <button class="btn-close" data-close="newworld-dialog">×</button>
+        </div>
+        <div class="dialog-content">
+          <p>Start a new village? Any unsaved progress will be lost.</p>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn-secondary" data-close="newworld-dialog">Cancel</button>
+          <button class="btn-primary" id="btn-newworld-confirm">Create World</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden">
+      <span id="toast-message"></span>
+    </div>
+  </div>
+
+  <script src="js/utils.js"></script>
+  <script src="js/constants.js"></script>
+  <script src="js/llm.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/villager.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>

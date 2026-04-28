@@ -1,0 +1,61 @@
+{
+  "name": "simville",
+  "version": "1.0.0",
+  "description": "LLM-driven tribal village life simulation game",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "build": "electron-builder --win",
+    "build:dir": "electron-builder --win --dir"
+  },
+  "author": "Simville Team",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^23.3.0"
+  },
+  "dependencies": {
+    "electron-log": "^5.2.4",
+    "electron-store": "^8.2.0"
+  },
+  "build": {
+    "appId": "com.simville.app",
+    "productName": "Simville",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Simville"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "saves",
+        "to": "saves",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
+  }
+}
