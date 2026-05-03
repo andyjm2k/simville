@@ -254,7 +254,7 @@ class UIManager {
     }, duration);
   }
 
-  updateHUD(timeState, resources, paused) {
+  updateHUD(timeState, resources, paused, villages = []) {
     // Time display
     const timeStr = Utils.formatTime(timeState.hours);
     this.elements.timeDisplay.textContent = `Day ${timeState.day}, ${timeStr}`;
@@ -282,6 +282,12 @@ class UIManager {
     if (this.elements.resThatch) this.elements.resThatch.textContent = this.formatResourceAmount(resources.thatch);
     if (this.elements.resRareMaterials) this.elements.resRareMaterials.textContent = this.formatResourceAmount(resources.rareMaterials);
     this.elements.resPopulation.textContent = window.game?.villagers?.length || 0;
+
+    // Update population to show both villages combined if applicable
+    if (villages.length > 1) {
+      const totalPop = villages.reduce((sum, v) => sum + (v.villagerIds?.length || 0), 0);
+      this.elements.resPopulation.textContent = totalPop;
+    }
   }
 
   formatResourceAmount(value) {
@@ -326,6 +332,17 @@ class UIManager {
     // Mood
     const moodInfo = Utils.getMoodDescription(villager.mood);
     this.elements.villagerMood.innerHTML = `Mood: <span class="mood-value ${moodInfo.class}">${moodInfo.text} (${villager.mood})</span>`;
+
+    // Partnership info
+    if (villager.partnerId) {
+      const partner = window.game?.villagers?.find(v => v.id === villager.partnerId);
+      if (partner) {
+        const affair = villager.affairPartnerId ? ' 💔' : ' 💑';
+        this.elements.villagerMood.innerHTML += `<br><small>Partner: ${partner.name}${affair}</small>`;
+      }
+    } else {
+      this.elements.villagerMood.innerHTML += `<br><small>Single</small>`;
+    }
 
     // Needs bars
     this.updateNeedsBars(villager);
@@ -482,6 +499,42 @@ class UIManager {
       <div class="need-row">Social<div class="progress-bar social"><div class="progress-fill social"></div></div></div>
     `;
     container.dataset.initialized = 'true';
+  }
+
+  updateVillagerPanel(villager) {
+    if (!villager) return;
+    const panel = document.getElementById('villager-panel');
+    if (!panel || panel.classList.contains('hidden')) return;
+
+    // Update status and activity
+    const activityText = this.formatVillagerDisplayText(villager.currentAction?.activity || villager.activity || 'Idle');
+    this.elements.villagerStatus.innerHTML = `Status: <span>${villager.status}</span><br><small>${activityText}</small>`;
+
+    // Update mood
+    const moodInfo = Utils.getMoodDescription(villager.mood);
+    let moodHtml = `Mood: <span class="mood-value ${moodInfo.class}">${moodInfo.text} (${villager.mood})</span>`;
+
+    // Partnership info
+    if (villager.partnerId) {
+      const partner = window.game?.villagers?.find(v => v.id === villager.partnerId);
+      if (partner) {
+        const affair = villager.affairPartnerId ? ' 💔' : ' 💑';
+        moodHtml += `<br><small>Partner: ${partner.name}${affair}</small>`;
+      }
+    } else {
+      moodHtml += `<br><small>Single</small>`;
+    }
+    this.elements.villagerMood.innerHTML = moodHtml;
+
+    // Update needs bars
+    this.updateNeedsBars(villager);
+
+    // Update current Activity with speech bubble if present
+    let activityDisplay = this.formatVillagerDisplayText(villager.activity || 'Idle');
+    if (villager.speechBubble) {
+      activityDisplay = `${villager.speechBubble.emoji} ${this.formatVillagerDisplayText(villager.speechBubble.theme || villager.activity)}`;
+    }
+    this.elements.villagerActivityText.textContent = activityDisplay;
   }
 
   updateBuildMenu(resources) {

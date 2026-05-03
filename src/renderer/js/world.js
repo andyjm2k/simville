@@ -7,14 +7,14 @@ class World {
     this.resources = [];
     this.structures = [];
     this.seed = Date.now();
-    this.villageCenter = { x: 0, y: 0 };
+    this.villageCenters = [];  // Array of { x, y } for multiple villages
   }
 
   generate() {
     Utils.setSeed(this.seed);
     this.generateTerrain();
     this.generateResources();
-    this.placeVillageCenter();
+    this.placeVillageCenters(2);  // Place 2 villages
     return this;
   }
 
@@ -490,52 +490,119 @@ class World {
     }
   }
 
-  placeVillageCenter() {
-    // Find a good location for the village center (cleared land or savanna near water)
-    let bestLocation = null;
-    let bestScore = -Infinity;
+  placeVillageCenters(count = 2) {
+    // Find good locations for multiple village centers, well separated
+    const minDistance = CONSTANTS.VILLAGE.MIN_DISTANCE_BETWEEN;
+    const centers = [];
 
-    for (let y = 10; y < this.size - 10; y++) {
-      for (let x = 10; x < this.size - 10; x++) {
-        const tile = this.tiles[y][x];
-        if (!tile.walkable) continue;
-        if (tile.biome === CONSTANTS.BIOME.OCEAN || tile.biome === CONSTANTS.BIOME.DENSE_JUNGLE) continue;
+    for (let c = 0; c < count; c++) {
+      let bestLocation = null;
+      let bestScore = -Infinity;
 
-        // Score based on nearby resources
-        let score = 0;
-        const nearbyResources = this.getResourcesInRadius(x, y, 5);
-        score += nearbyResources.filter(r => r.type === CONSTANTS.RESOURCE.WOOD).length * 2;
-        score += nearbyResources.filter(r => r.type === CONSTANTS.RESOURCE.WATER).length * 3;
-        score += nearbyResources.filter(r => r.type === CONSTANTS.RESOURCE.FOOD).length * 2;
+      for (let y = 10; y < this.size - 10; y++) {
+        for (let x = 10; x < this.size - 10; x++) {
+          const tile = this.tiles[y][x];
+          if (!tile.walkable) continue;
+          if (tile.biome === CONSTANTS.BIOME.OCEAN || tile.biome === CONSTANTS.BIOME.DENSE_JUNGLE) continue;
 
-        // Prefer central locations
-        const centerDist = Math.abs(x - this.size / 2) + Math.abs(y - this.size / 2);
-        score -= centerDist * 0.1;
+          // Check distance from existing village centers
+          let tooClose = false;
+          for (const existing of centers) {
+            if (Utils.distance(x, y, existing.x, existing.y) < minDistance) {
+              tooClose = true;
+              break;
+            }
+          }
+          if (tooClose) continue;
 
-        // Check for nearby water
-        const hasWater = nearbyResources.some(r => r.type === CONSTANTS.RESOURCE.WATER);
-        if (hasWater) score += 5;
+          // Score based on nearby resources
+          let score = 0;
+          const nearbyResources = this.getResourcesInRadius(x, y, 5);
+          score += nearbyResources.filter(r => r.type === CONSTANTS.RESOURCE.WOOD).length * 2;
+          score += nearbyResources.filter(r => r.type === CONSTANTS.RESOURCE.WATER).length * 3;
+          score += nearbyResources.filter(r => r.type === CONSTANTS.RESOURCE.FOOD).length * 2;
 
-        if (score > bestScore) {
-          bestScore = score;
-          bestLocation = { x, y };
+          // For second village, prefer opposite side of map
+          if (c > 0) {
+            const firstCenter = centers[0];
+            const distFromFirst = Utils.distance(x, y, firstCenter.x, firstCenter.y);
+            score += distFromFirst * 0.3; // Reward distance from first village
+          } else {
+            // For first village, prefer central locations
+            const centerDist = Math.abs(x - this.size / 2) + Math.abs(y - this.size / 2);
+            score -= centerDist * 0.1;
+          }
+
+          // Check for nearby water
+          const hasWater = nearbyResources.some(r => r.type === CONSTANTS.RESOURCE.WATER);
+          if (hasWater) score += 5;
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestLocation = { x, y };
+          }
+        }
+      }
+
+      // Fallback to a random location if no good spot found
+      if (!bestLocation) {
+        let attempts = 0;
+        while (!bestLocation && attempts < 100) {
+          const rx = Utils.randomInt(15, this.size - 15);
+          const ry = Utils.randomInt(15, this.size - 15);
+          const tile = this.tiles[ry]?.[rx];
+          if (tile?.walkable && tile.biome !== CONSTANTS.BIOME.OCEAN && tile.biome !== CONSTANTS.BIOME.DENSE_JUNGLE) {
+            let tooClose = false;
+            for (const existing of centers) {
+              if (Utils.distance(rx, ry, existing.x, existing.y) < minDistance) {
+                tooClose = true;
+                break;
+              }
+            }
+            if (!tooClose) {
+              bestLocation = { x: rx, y: ry };
+            }
+          }
+          attempts++;
+        }
+        if (!bestLocation) {
+          // Last resort: just place it
+          bestLocation = { x: c === 0 ? Math.floor(this.size / 2) : this.size - 20, y: c === 0 ? Math.floor(this.size / 2) : 20 };
+        }
+      }
+
+      centers.push(bestLocation);
+
+      // Mark village center tiles
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const tx = bestLocation.x + dx;
+          const ty = bestLocation.y + dy;
+          if (tx >= 0 && tx < this.size && ty >= 0 && ty < this.size) {
+            this.tiles[ty][tx].biome = CONSTANTS.BIOME.VILLAGE_CENTER;
+            this.tiles[ty][tx].walkable = true;
+          }
         }
       }
     }
 
-    this.villageCenter = bestLocation || { x: Math.floor(this.size / 2), y: Math.floor(this.size / 2) };
+    this.villageCenters = centers;
+  }
 
-    // Mark village center tiles
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const tx = this.villageCenter.x + dx;
-        const ty = this.villageCenter.y + dy;
-        if (tx >= 0 && tx < this.size && ty >= 0 && ty < this.size) {
-          this.tiles[ty][tx].biome = CONSTANTS.BIOME.VILLAGE_CENTER;
-          this.tiles[ty][tx].walkable = true;
-        }
+  // Get which village a position belongs to (by territory)
+  getVillageAt(x, y) {
+    for (let i = 0; i < this.villageCenters.length; i++) {
+      const center = this.villageCenters[i];
+      if (Utils.distance(x, y, center.x, center.y) <= CONSTANTS.VILLAGE.DEFAULT_RADIUS) {
+        return i;
       }
     }
+    return -1; // Not in any village's territory
+  }
+
+  // Legacy method for backwards compatibility
+  get villageCenter() {
+    return this.villageCenters[0] || { x: Math.floor(this.size / 2), y: Math.floor(this.size / 2) };
   }
 
   getTile(x, y) {
@@ -673,7 +740,7 @@ class World {
       resources: this.resources,
       structures: this.structures,
       seed: this.seed,
-      villageCenter: this.villageCenter
+      villageCenters: this.villageCenters
     };
   }
 
@@ -684,7 +751,8 @@ class World {
     world.resources = data.resources;
     world.structures = data.structures || [];
     world.seed = data.seed;
-    world.villageCenter = data.villageCenter;
+    // Handle both old (single center) and new (array) formats
+    world.villageCenters = data.villageCenters || (data.villageCenter ? [data.villageCenter] : []);
     return world;
   }
 }
@@ -1023,7 +1091,7 @@ class WorldRenderer {
     ctx.restore();
   }
 
-  renderMinimap(minimapCanvas, villagers, showLabels = true, constructionProjects = []) {
+  renderMinimap(minimapCanvas, villagers, showLabels = true, constructionProjects = [], villages = []) {
     const ctx = minimapCanvas.getContext('2d');
     const scale = minimapCanvas.width / this.world.size;
 
@@ -1042,9 +1110,29 @@ class WorldRenderer {
       }
     }
 
-    // Draw structures
+    // Draw village territories (subtle colored regions)
+    const villageColors = ['rgba(78, 204, 163, 0.15)', 'rgba(233, 69, 96, 0.15)'];
+    villages.forEach((village, idx) => {
+      if (idx < 2) {
+        const color = villageColors[idx] || 'rgba(128, 128, 128, 0.15)';
+        const radius = village.territoryRadius * scale;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(village.center.x * scale, village.center.y * scale, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+
+    // Draw structures (colored by village)
     this.world.structures.forEach(s => {
-      ctx.fillStyle = '#fff';
+      let color = '#fff';
+      for (let i = 0; i < villages.length; i++) {
+        if (villages[i].structureIds.includes(s.id)) {
+          color = i === 0 ? '#4ecca3' : '#e94560';
+          break;
+        }
+      }
+      ctx.fillStyle = color;
       ctx.fillRect(s.x * scale - 1, s.y * scale - 1, 3, 3);
     });
 
@@ -1053,22 +1141,38 @@ class WorldRenderer {
       ctx.fillRect(project.x * scale - 1, project.y * scale - 1, 3, 3);
     });
 
-    // Draw villagers
+    // Draw villagers (colored by village)
     villagers.forEach(v => {
       const isChieftan = v.isChieftan;
-      ctx.fillStyle = isChieftan ? '#ffd700' : '#e94560';
+      let baseColor = isChieftan ? '#ffd700' : '#e94560';
+      if (v.villageId) {
+        const villageIdx = villages.findIndex(vil => vil.id === v.villageId);
+        if (villageIdx === 0) baseColor = isChieftan ? '#ffd700' : '#4ecca3';
+        else if (villageIdx === 1) baseColor = isChieftan ? '#ff6b6b' : '#e94560';
+      }
+      ctx.fillStyle = baseColor;
       ctx.beginPath();
       ctx.arc(v.x * scale, v.y * scale, isChieftan ? 3 : 2, 0, Math.PI * 2);
       ctx.fill();
     });
 
-    // Draw village center marker
-    ctx.strokeStyle = '#4ecca3';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(
-      this.world.villageCenter.x * scale - 3,
-      this.world.villageCenter.y * scale - 3,
-      7, 7
-    );
+    // Draw all village center markers
+    const centerColors = ['#4ecca3', '#e94560'];
+    this.world.villageCenters.forEach((center, idx) => {
+      ctx.strokeStyle = centerColors[idx] || '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(
+        center.x * scale - 4,
+        center.y * scale - 4,
+        8, 8
+      );
+
+      // Village number label
+      if (showLabels) {
+        ctx.fillStyle = centerColors[idx] || '#fff';
+        ctx.font = `${Math.max(8, minimapCanvas.width / 50)}px Arial`;
+        ctx.fillText(`${idx + 1}`, center.x * scale - 2, center.y * scale + 1);
+      }
+    });
   }
 }

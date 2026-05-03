@@ -26,6 +26,7 @@ class Villager {
     this.energy = data.energy ?? 100;
     this.socialNeed = data.socialNeed ?? 80;
     this.mood = data.mood ?? 50;
+    this.causeOfDeath = data.causeOfDeath || null;
 
     // Status
     this.status = data.status || CONSTANTS.ACTIVITY.IDLE;
@@ -43,6 +44,7 @@ class Villager {
     this.expectingChild = data.expectingChild || null;
     this.lastChildDay = data.lastChildDay || 0;
     this.lastPartnershipDay = data.lastPartnershipDay || 0;
+    this.affairPartnerId = data.affairPartnerId || null;
 
     // Life stage
     this.lifeStage = Utils.getLifeStage(this.age);
@@ -50,6 +52,7 @@ class Villager {
     // Roles
     this.isChieftan = data.isChieftan || false;
     this.title = data.title || this.determineTitle();
+    this.villageId = data.villageId || null;
 
     // Backstory
     this.backstory = data.backstory || '';
@@ -182,6 +185,17 @@ class Villager {
     // Health effects
     if (this.hunger <= 0 || this.thirst <= 0 || this.energy <= 0) {
       this.health = Math.max(0, this.health - 5 * hourFraction);
+      if (this.health <= 0 && !this.causeOfDeath) {
+        if (this.hunger <= 0 && this.thirst <= 0) {
+          this.causeOfDeath = 'perished from starvation and dehydration';
+        } else if (this.hunger <= 0) {
+          this.causeOfDeath = 'perished from starvation';
+        } else if (this.thirst <= 0) {
+          this.causeOfDeath = 'perished from dehydration';
+        } else if (this.energy <= 0) {
+          this.causeOfDeath = 'succumbed to exhaustion';
+        }
+      }
     }
 
     // Natural health recovery
@@ -546,6 +560,7 @@ class Villager {
       energy: this.energy,
       socialNeed: this.socialNeed,
       mood: this.mood,
+      causeOfDeath: this.causeOfDeath,
       status: this.status,
       activity: this.activity,
       activityDuration: this.activityDuration,
@@ -559,8 +574,10 @@ class Villager {
       expectingChild: this.expectingChild,
       lastChildDay: this.lastChildDay,
       lastPartnershipDay: this.lastPartnershipDay,
+      affairPartnerId: this.affairPartnerId,
       isChieftan: this.isChieftan,
       title: this.title,
+      villageId: this.villageId,
       backstory: this.backstory,
       goals: this.goals,
       secrets: this.secrets,
@@ -575,6 +592,7 @@ class Villager {
   static deserialize(data) {
     const v = new Villager(data);
     v.lifeStage = Utils.getLifeStage(data.age);
+    v.villageId = data.villageId || null;
     return v;
   }
 }

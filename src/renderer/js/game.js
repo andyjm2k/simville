@@ -9,9 +9,8 @@ class Game {
     this.ui = null;
 
     this.villagers = [];
-    this.resources = this.getDefaultResources();
+    this.villages = [];  // Array of Village objects
     this.constructionProjects = [];
-    this.government = this.createDefaultGovernment();
 
     this.timeState = {
       day: 1,
@@ -71,6 +70,517 @@ class Game {
 
     // Event queue for chronicle
     this.eventQueue = [];
+
+    // Inter-village state
+    this.activeRaid = null;  // { attackerVillageId, targetVillageId, raiderIds[], progress, phase }
+    this.diplomaticEvents = [];  // Pending proposals
+    this.nextChieftanDecision = {};  // { villageId: dayNumber } - when to request next decision
+    this.hostileDaysCount = {};  // { villageId_pair: days } - tracking days at hostile relations
+  }
+
+  // Get village by ID
+  getVillage(id) {
+    return this.villages.find(v => v.id === id);
+  }
+
+  // Get villagers for a specific village
+  getVillagersForVillage(villageId) {
+    return this.villagers.filter(v => v.villageId === villageId);
+  }
+
+  // Calculate village strength for war/comparison
+  calculateVillageStrength(villageId) {
+    const village = this.getVillage(villageId);
+    if (!village) return 0;
+    return village.calculateStrength(this.villagers);
+  }
+
+  // Create two villages with distinct identities
+  createVillages(count = 2) {
+    this.villages = [];
+
+    for (let i = 0; i < count; i++) {
+      const center = this.world.villageCenters[i] || { x: this.world.size / 2, y: this.world.size / 2 };
+
+      const village = new Village({
+        center: center,
+        territoryRadius: CONSTANTS.VILLAGE.DEFAULT_RADIUS,
+        name: i === 0 ? 'Elder' + Utils.randomElement(['brook', 'vale', 'hollow']) : 'Shadow' + Utils.randomElement(['fall', 'mere', 'glen'])
+      });
+
+      this.villages.push(village);
+    }
+
+    // Set up initial relations (slightly competitive)
+    if (this.villages.length === 2) {
+      this.villages[0].relations[this.villages[1].id] = -15;  // Rivalry
+      this.villages[1].relations[this.villages[0].id] = -15;
+    }
+  }
+
+  // Assign villagers to villages
+  assignVillagersToVillages() {
+    const baseOffset = 5;
+
+    for (let i = 0; i < this.villages.length; i++) {
+      const village = this.villages[i];
+      const center = village.center;
+
+      // Get villagers for this village (by position or index)
+      const villageVillagers = this.villagers.filter(v => {
+        if (v.villageId) return v.villageId === village.id;
+        // Fallback: assign by index round-robin
+        return true; // Will filter below
+      });
+
+      // Assign first portion to each village based on index
+      const startIdx = i * CONSTANTS.VILLAGE.STARTING_VILLAGERS;
+      const endIdx = startIdx + CONSTANTS.VILLAGE.STARTING_VILLAGERS;
+
+      this.villagers.forEach((v, idx) => {
+        if (idx === 0) {
+          // First villager (chieftan) goes to village 0
+          v.villageId = this.villages[0].id;
+          this.villages[0].villagerIds.push(v.id);
+        } else if (idx === baseOffset) {
+          // Index baseOffset goes to village 1
+          if (this.villages[1]) {
+            v.villageId = this.villages[1].id;
+            this.villages[1].villagerIds.push(v.id);
+          }
+        } else if (idx > 0 && idx < baseOffset) {
+          // Others to village 0
+          v.villageId = this.villages[0].id;
+          this.villages[0].villagerIds.push(v.id);
+        }
+      });
+    }
+
+    // Make sure chieftans are assigned correctly
+    this.villages.forEach(village => {
+      const villagers = this.getVillagersForVillage(village.id);
+      const chieftan = villagers.find(v => v.isChieftan);
+      if (!chieftan && villagers.length > 0) {
+        // Make first adult chieftan if none
+        const adult = villagers.find(v => v.lifeStage === CONSTANTS.LIFE_STAGE.ADULT);
+        if (adult) {
+          adult.isChieftan = true;
+          adult.title = 'Chieftan';
+        }
+      }
+    });
+  }
+
+  // Handle conquest - losing village absorbed by winning village
+  handleConquest(losingVillageId, winningVillageId) {
+    const losingVillage = this.getVillage(losingVillageId);
+    const winningVillage = this.getVillage(winningVillageId);
+    if (!losingVillage || !winningVillage) return;
+
+    const villagers = this.getVillagersForVillage(losingVillageId);
+    const chieftan = villagers.find(v => v.isChieftan);
+
+    // Chronicle entry
+    this.addChronicleEntry(`The ${losingVillage.name} has been conquered by ${winningVillage.name}! The era of ${losingVillage.name} ends as its people merge with their new allies.`);
+
+    // Transfer villagers to winning village
+    villagers.forEach(v => {
+      v.villageId = winningVillageId;
+      winningVillage.villagerIds.push(v.id);
+
+      // Remove enemy status between villagers
+      const winningVillagers = this.getVillagersForVillage(winningVillageId);
+      winningVillagers.forEach(wv => {
+        const keyToRemove = Object.keys(wv.relationships).find(k =>
+          k.toLowerCase().includes(losingVillage.name.toLowerCase())
+        );
+        if (keyToRemove) {
+          delete wv.relationships[keyToRemove];
+        }
+      });
+    });
+
+    // Transfer structures
+    losingVillage.structureIds.forEach(structureId => {
+      winningVillage.structureIds.push(structureId);
+    });
+
+    // Remove losing village from list
+    const idx = this.villages.findIndex(v => v.id === losingVillageId);
+    if (idx !== -1) {
+      this.villages.splice(idx, 1);
+    }
+
+    // End any wars
+    winningVillage.atWarWith = winningVillage.atWarWith.filter(id => id !== losingVillageId);
+  }
+
+  // Trigger war between villages
+  triggerWar(villageId1, villageId2) {
+    const v1 = this.getVillage(villageId1);
+    const v2 = this.getVillage(villageId2);
+    if (!v1 || !v2) return;
+
+    if (!v1.atWarWith.includes(villageId2)) {
+      v1.atWarWith.push(villageId2);
+    }
+    if (!v2.atWarWith.includes(villageId1)) {
+      v2.atWarWith.push(villageId1);
+    }
+
+    // Update relations
+    v1.relations[villageId2] = Math.min(v1.relations[villageId2] || 0, CONSTANTS.VILLAGE_RELATION.WAR_THRESHOLD - 10);
+    v2.relations[villageId1] = Math.min(v2.relations[villageId1] || 0, CONSTANTS.VILLAGE_RELATION.WAR_THRESHOLD - 10);
+
+    this.addChronicleEntry(`War has broken out between ${v1.name} and ${v2.name}! The tribes prepare for conflict.`);
+  }
+
+  // End war and negotiate peace
+  endWar(villageId1, villageId2) {
+    const v1 = this.getVillage(villageId1);
+    const v2 = this.getVillage(villageId2);
+    if (!v1 || !v2) return;
+
+    v1.atWarWith = v1.atWarWith.filter(id => id !== villageId2);
+    v2.atWarWith = v2.atWarWith.filter(id => id !== villageId1);
+
+    // Improve relations but not to neutral
+    v1.relations[villageId2] = Math.max(v1.relations[villageId2] || 0, CONSTANTS.VILLAGE_RELATION.HOSTILE_THRESHOLD);
+    v2.relations[villageId1] = Math.max(v2.relations[villageId1] || 0, CONSTANTS.VILLAGE_RELATION.HOSTILE_THRESHOLD);
+
+    this.addChronicleEntry(`Peace has been negotiated between ${v1.name} and ${v2.name}. A new era of cautious relations begins.`);
+  }
+
+  // Process diplomatic events
+  processDiplomaticEvents() {
+    for (let i = this.diplomaticEvents.length - 1; i >= 0; i--) {
+      const event = this.diplomaticEvents[i];
+      event.age += this.timeState.dayDuration;
+
+      // Remove old events after 3 days
+      if (event.age > 3 * this.timeState.dayDuration) {
+        this.diplomaticEvents.splice(i, 1);
+      }
+    }
+  }
+
+  // Process active raid if one is ongoing
+  processRaid(deltaTime) {
+    if (!this.activeRaid) return;
+
+    const attacker = this.getVillage(this.activeRaid.attackerVillageId);
+    const defender = this.getVillage(this.activeRaid.targetVillageId);
+    if (!attacker || !defender) {
+      this.activeRaid = null;
+      return;
+    }
+
+    const phase = this.activeRaid.phase;
+
+    switch (phase) {
+      case 'planning': {
+        // Raiders gather at edge of attacker territory - advance after 1-2 days
+        this.activeRaid.planningTimer += deltaTime / this.timeState.dayDuration;
+        if (this.activeRaid.planningTimer >= 1.5) {
+          this.activeRaid.phase = 'moving';
+          this.activeRaid.planningTimer = 0;
+          this.addChronicleEntry(`A raiding party from ${attacker.name} sets out toward ${defender.name}!`);
+        }
+        break;
+      }
+      case 'moving': {
+        // Raiders travel toward defender - advance after 1-2 days
+        this.activeRaid.travelTimer += deltaTime / this.timeState.dayDuration;
+        if (this.activeRaid.travelTimer >= 1.5) {
+          this.activeRaid.phase = 'attacking';
+          this.activeRaid.travelTimer = 0;
+          this.addChronicleEntry(`The raiders from ${attacker.name} arrive at ${defender.name}! Combat begins!`);
+        }
+        break;
+      }
+      case 'attacking': {
+        // Combat resolution happens once, then move to retreating
+        const attackerStrength = this.activeRaid.raiderIds.length * CONSTANTS.WAR.ATTACKER_STRENGTH_BASE * (0.8 + Math.random() * 0.4);
+        const defenderStrength = defender.calculateStrength(this.villagers) * CONSTANTS.WAR.DEFENDER_ADVANTAGE;
+        const attackerWon = attackerStrength > defenderStrength;
+
+        // Calculate casualties
+        const raiderCount = this.activeRaid.raiderIds.length;
+        if (!attackerWon) {
+          // Raiders take heavy losses
+          const casualties = Math.floor(raiderCount * (0.2 + Math.random() * 0.3));
+          for (let i = 0; i < casualties && this.activeRaid.raiderIds.length > 0; i++) {
+            const raiderId = this.activeRaid.raiderIds.pop();
+            const raider = this.villagers.find(v => v.id === raiderId);
+            if (raider) {
+              this.addChronicleEntry(`${raider.name} was slain in the raid on ${defender.name}.`);
+              this.removeVillager(raider);
+            }
+          }
+          this.addChronicleEntry(`The raid on ${defender.name} failed! The raiders scatter in defeat.`);
+        } else {
+          // Raiders succeed - defenders take casualties
+          const defenderCasualties = Math.floor(raiderCount * (0.15 + Math.random() * 0.25));
+          const defenderVillagers = this.getVillagersForVillage(defender.id);
+          for (let i = 0; i < defenderCasualties && defenderVillagers.length > 0; i++) {
+            const idx = Math.floor(Math.random() * defenderVillagers.length);
+            const victim = defenderVillagers[idx];
+            if (victim) {
+              this.addChronicleEntry(`${victim.name} of ${defender.name} was killed in the raid.`);
+              this.removeVillager(victim);
+              defenderVillagers.splice(idx, 1);
+            }
+          }
+
+          // Loot resources
+          const lootAmount = 5 + Math.floor(Math.random() * 10);
+          const stolenFood = Math.min(defender.resources.food, lootAmount);
+          const stolenWood = Math.min(defender.resources.wood, lootAmount);
+          attacker.resources.food += stolenFood;
+          attacker.resources.wood += stolenWood;
+          defender.resources.food -= stolenFood;
+          defender.resources.wood -= stolenWood;
+
+          this.addChronicleEntry(`The raid succeeds! ${attacker.name} claims ${stolenFood} food and ${stolenWood} wood from ${defender.name}.`);
+
+          // Set retreat timer
+          this.activeRaid.phase = 'retreating';
+          this.activeRaid.loot = { food: stolenFood, wood: stolenWood };
+        }
+
+        // Set attacker raid cooldown
+        attacker.raidCooldown = CONSTANTS.WAR.RAID_COOLDOWN_DAYS;
+
+        // Evaluate conquest after raid
+        this.evaluateConquest(defender.id, attacker.id);
+        break;
+      }
+      case 'retreating': {
+        // Raiders return home - advance after 1-2 days
+        this.activeRaid.retreatTimer += deltaTime / this.timeState.dayDuration;
+        if (this.activeRaid.retreatTimer >= 1.5) {
+          this.addChronicleEntry(`The raiding party from ${attacker.name} returns home victorious!`);
+          this.activeRaid = null;
+        }
+        break;
+      }
+    }
+  }
+
+  // Request chieftan diplomacy decision for a village
+  async requestChieftanDiplomacy(villageId) {
+    const village = this.getVillage(villageId);
+    if (!village) return;
+
+    // Find chieftan
+    const chieftan = this.getVillagersForVillage(villageId).find(v => v.isChieftan);
+    if (!chieftan) return;
+
+    // Find target village (the other one)
+    if (this.villages.length < 2) return;
+    const otherVillage = this.villages.find(v => v.id !== villageId);
+    if (!otherVillage) return;
+
+    // Check raid cooldown
+    if (village.raidCooldown > 0) return;
+
+    // Generate diplomatic action via LLM
+    const context = {
+      yourStrength: village.calculateStrength(this.villagers),
+      theirStrength: otherVillage.calculateStrength(this.villagers)
+    };
+
+    const decision = await llm.generateDiplomaticAction(village, otherVillage, context);
+
+    if (decision && decision.action) {
+      // Create diplomatic event
+      const event = {
+        type: decision.action,
+        sourceVillageId: villageId,
+        targetVillageId: otherVillage.id,
+        reason: decision.reason || 'No reason given',
+        urgency: decision.urgency || 'medium',
+        age: 0,
+        chieftanName: chieftan.name
+      };
+      this.diplomaticEvents.push(event);
+
+      // If raid, start immediately
+      if (decision.action === 'raid') {
+        this.startRaid(villageId, otherVillage.id);
+      }
+    }
+  }
+
+  // Start a raid from attacker to defender
+  startRaid(attackerVillageId, targetVillageId) {
+    const attacker = this.getVillage(attackerVillageId);
+    const defender = this.getVillage(targetVillageId);
+    if (!attacker || !defender) return;
+    if (this.activeRaid) return; // Only one raid at a time
+
+    // Select raiders from attacker village
+    const raiderCount = CONSTANTS.WAR.MIN_RAIDERS + Math.floor(Math.random() * (CONSTANTS.WAR.MAX_RAIDERS - CONSTANTS.WAR.MIN_RAIDERS + 1));
+    const adultVillagers = this.getVillagersForVillage(attackerVillageId).filter(v => v.lifeStage !== CONSTANTS.LIFE_STAGE.CHILD);
+    const availableRaiders = Math.min(raiderCount, Math.floor(adultVillagers.length / 2));
+
+    if (availableRaiders < CONSTANTS.WAR.MIN_RAIDERS) {
+      this.addChronicleEntry(`${attacker.name} wanted to raid ${defender.name} but lacked enough warriors.`);
+      return;
+    }
+
+    // Pick random raiders
+    const raiderIds = [];
+    const shuffled = [...adultVillagers].sort(() => Math.random() - 0.5);
+    for (let i = 0; i < availableRaiders; i++) {
+      raiderIds.push(shuffled[i].id);
+    }
+
+    this.activeRaid = {
+      attackerVillageId,
+      targetVillageId,
+      raiderIds,
+      phase: 'planning',
+      planningTimer: 0,
+      travelTimer: 0,
+      retreatTimer: 0,
+      loot: null
+    };
+
+    this.addChronicleEntry(`${attacker.name} is organizing a raid against ${defender.name}!`);
+  }
+
+  // Process chieftan diplomatic decisions
+  processChieftanDecisions() {
+    for (let i = this.diplomaticEvents.length - 1; i >= 0; i--) {
+      const event = this.diplomaticEvents[i];
+      const sourceVillage = this.getVillage(event.sourceVillageId);
+      const targetVillage = this.getVillage(event.targetVillageId);
+      if (!sourceVillage || !targetVillage) {
+        this.diplomaticEvents.splice(i, 1);
+        continue;
+      }
+
+      // Age the event - process when urgency warrants
+      const urgencyMultiplier = event.urgency === 'high' ? 0.5 : event.urgency === 'low' ? 2 : 1;
+      event.age += this.timeState.dayDuration * urgencyMultiplier;
+
+      // Only process after brief aging (so chronicle captures the decision)
+      if (event.age < this.timeState.dayDuration * 0.5) continue;
+
+      switch (event.type) {
+        case 'propose_trade': {
+          // Accept trade - improve relations
+          const currentRelation = sourceVillage.relations[targetVillage.id] || 0;
+          sourceVillage.relations[targetVillage.id] = Math.min(100, currentRelation + 15);
+          targetVillage.relations[sourceVillage.id] = Math.min(100, (targetVillage.relations[sourceVillage.id] || 0) + 15);
+          this.addChronicleEntry(`${sourceVillage.name} and ${targetVillage.name} have established a trade agreement.`);
+          break;
+        }
+        case 'propose_alliance': {
+          // Accept alliance - major relation boost
+          const currentRelation = sourceVillage.relations[targetVillage.id] || 0;
+          sourceVillage.relations[targetVillage.id] = Math.min(100, currentRelation + 40);
+          targetVillage.relations[sourceVillage.id] = Math.min(100, (targetVillage.relations[sourceVillage.id] || 0) + 40);
+          this.addChronicleEntry(`${sourceVillage.name} and ${targetVillage.name} have formed an alliance!`);
+          break;
+        }
+        case 'send_threat': {
+          // Reduce relations, may trigger counter-threat
+          const currentRelation = sourceVillage.relations[targetVillage.id] || 0;
+          sourceVillage.relations[targetVillage.id] = Math.max(-100, currentRelation - 20);
+          targetVillage.relations[sourceVillage.id] = Math.max(-100, (targetVillage.relations[sourceVillage.id] || 0) - 10);
+          this.addChronicleEntry(`${sourceVillage.name} sends threats toward ${targetVillage.name}! Relations worsen.`);
+          break;
+        }
+        case 'ignore':
+          // No effect, just remove
+          break;
+        case 'observe':
+          // No effect, just remove
+          break;
+        case 'raid':
+          // Raid already started via startRaid(), just remove event
+          break;
+      }
+
+      this.diplomaticEvents.splice(i, 1);
+    }
+  }
+
+  // Evaluate war escalation - check hostile villages daily
+  evaluateWarEscalation() {
+    if (this.villages.length < 2) return;
+
+    for (let i = 0; i < this.villages.length; i++) {
+      const village = this.villages[i];
+      for (let j = 0; j < this.villages.length; j++) {
+        if (i === j) continue;
+        const otherVillage = this.villages[j];
+        const relation = village.relations[otherVillage.id] || 0;
+
+        // Create pair key
+        const pairKey = [village.id, otherVillage.id].sort().join('_');
+
+        // Check if already at war
+        if (village.atWarWith.includes(otherVillage.id)) {
+          // At war - check if should end (relations improved)
+          if (relation >= CONSTANTS.VILLAGE_RELATION.HOSTILE_THRESHOLD) {
+            this.endWar(village.id, otherVillage.id);
+          }
+          continue;
+        }
+
+        // Not at war - check for escalation
+        if (relation < CONSTANTS.VILLAGE_RELATION.WAR_THRESHOLD) {
+          // Count days at hostile relations
+          if (!this.hostileDaysCount[pairKey]) {
+            this.hostileDaysCount[pairKey] = 0;
+          }
+          this.hostileDaysCount[pairKey]++;
+
+          // After threshold days, either trigger war or chieftan decides
+          if (this.hostileDaysCount[pairKey] >= CONSTANTS.DIPLOMACY.HOSTILE_WAR_THRESHOLD_DAYS) {
+            // Random chance each day after threshold to trigger war
+            if (Math.random() < 0.3) {
+              this.triggerWar(village.id, otherVillage.id);
+            }
+          }
+        } else {
+          // Relations improved - reset hostile days
+          this.hostileDaysCount[pairKey] = 0;
+        }
+      }
+    }
+
+    // Update raid cooldowns
+    for (const village of this.villages) {
+      if (village.raidCooldown > 0) {
+        village.raidCooldown--;
+      }
+    }
+  }
+
+  // Evaluate conquest - check if defender lost enough population
+  evaluateConquest(defenderId, attackerId) {
+    const defender = this.getVillage(defenderId);
+    const attacker = this.getVillage(attackerId);
+    if (!defender || !attacker) return;
+
+    // Track original population for conquest calculation
+    if (defender.originalPopulation === undefined) {
+      defender.originalPopulation = this.getVillagersForVillage(defenderId).length;
+    }
+
+    const currentVillagers = this.getVillagersForVillage(defenderId).length;
+    const originalPopulation = defender.originalPopulation || currentVillagers;
+
+    // Calculate loss percentage
+    const lossRatio = 1 - (currentVillagers / Math.max(1, originalPopulation));
+
+    if (lossRatio >= CONSTANTS.WAR.CONQUEST_THRESHOLD) {
+      this.handleConquest(defenderId, attackerId);
+    }
   }
 
   async initialize() {
@@ -440,7 +950,7 @@ class Game {
 
   newWorld() {
     console.log('newWorld: Starting');
-    // Generate new world
+    // Generate new world (creates 2 village centers)
     this.world = new World(64);
     this.world.generate();
     this.ensureVillageResourceAccess();
@@ -449,12 +959,16 @@ class Game {
     this.selectedVillager = null;
     this.cameraTarget = null;
 
-    // Create initial villagers
+    // Create villages
+    this.createVillages(2);
+
+    // Create initial villagers (distributed between villages)
     this.createInitialVillagers();
+    this.assignVillagersToVillages();
     this.initializeVillageRelationships();
     console.log('newWorld: After createInitialVillagers, villagers:', this.villagers.length);
     for (const v of this.villagers) {
-      console.log('  ', v.name, 'at', v.x.toFixed(2), v.y.toFixed(2));
+      console.log('  ', v.name, 'at', v.x.toFixed(2), v.y.toFixed(2), 'village:', v.villageId);
     }
 
     // Create starting structures
@@ -470,12 +984,9 @@ class Game {
       dayDuration: this.timeState.dayDuration || 600000
     };
 
-    // Reset resources
-    this.resources = this.getDefaultResources();
     this.constructionProjects = [];
     this.constructionAccumulator = 0;
     this.goalAccumulator = 0;
-    this.government = this.createDefaultGovernment();
 
     // Reset chronicle
     this.chronicle = {
@@ -490,10 +1001,12 @@ class Game {
     };
 
     // Add first chronicle entry
-    this.addChronicleEntry('The village of Simville has been founded. Under the leadership of the first chieftan, the settlers begin building their new home.');
+    const v1Name = this.villages[0]?.name || 'Simville';
+    const v2Name = this.villages[1]?.name || 'the rival village';
+    this.addChronicleEntry(`Two villages have been founded: ${v1Name} and ${v2Name}. The tribes begin building their settlements, unaware of the neighbors that will soon change everything.`);
 
-    // Center camera on village
-    this.worldRenderer.centerOn(this.world.villageCenter.x, this.world.villageCenter.y);
+    // Center camera on first village
+    this.worldRenderer.centerOn(this.world.villageCenters[0]?.x || this.world.size / 2, this.world.villageCenters[0]?.y || this.world.size / 2);
 
     // Unpause
     this.paused = false;
@@ -501,7 +1014,7 @@ class Game {
     // Initial LLM generation for backstories
     this.generateInitialBackstories();
 
-    this.ui.showToast('Welcome to Simville!');
+    this.ui.showToast('Welcome to Simville - Two Villages!');
   }
 
   async generateInitialBackstories() {
@@ -689,46 +1202,52 @@ class Game {
   createInitialVillagers() {
     this.villagers = [];
 
-    // Create chieftan
-    const chieftan = new Villager({
-      name: Utils.generateName('male'),
-      age: Utils.randomInt(35, 50),
-      gender: 'male',
-      isChieftan: true,
-      skills: {
-        gathering: 6,
-        crafting: 5,
-        farming: 5,
-        fishing: 4,
-        hunting: 6,
-        social: 8,
-        leadership: 9
-      },
-      personality: {
-        sociable: 70,
-        active: 60,
-        curious: 50,
-        empathetic: 65,
-        confident: 85
-      }
-    });
+    // Create 2 chieftans (one per village)
+    for (let i = 0; i < 2; i++) {
+      const chieftan = new Villager({
+        name: Utils.generateName('male'),
+        age: Utils.randomInt(35, 50),
+        gender: 'male',
+        isChieftan: true,
+        skills: {
+          gathering: 6,
+          crafting: 5,
+          farming: 5,
+          fishing: 4,
+          hunting: 6,
+          social: 8,
+          leadership: 9
+        },
+        personality: {
+          sociable: 70,
+          active: 60,
+          curious: 50,
+          empathetic: 65,
+          confident: 85
+        }
+      });
 
-    chieftan.x = this.world.villageCenter.x + Utils.randomFloat(-1, 1);
-    chieftan.y = this.world.villageCenter.y + Utils.randomFloat(-1, 1);
+      const center = this.world.villageCenters[i] || { x: this.world.size / 2, y: this.world.size / 2 };
+      chieftan.x = center.x + Utils.randomFloat(-1, 1);
+      chieftan.y = center.y + Utils.randomFloat(-1, 1);
 
-    this.villagers.push(chieftan);
+      this.villagers.push(chieftan);
+    }
 
-    // Create 5 tribespeople
-    const genders = ['male', 'female', 'female', 'male', 'nonbinary'];
-    for (let i = 0; i < 5; i++) {
+    // Create 4 additional tribespeople per village (8 total)
+    const genders = ['male', 'female', 'female', 'male', 'nonbinary', 'female', 'male', 'nonbinary'];
+    for (let i = 0; i < 8; i++) {
       const villager = new Villager({
         name: Utils.generateName(genders[i]),
         age: Utils.randomInt(18, 45),
         gender: genders[i]
       });
 
-      villager.x = this.world.villageCenter.x + Utils.randomFloat(-2, 2);
-      villager.y = this.world.villageCenter.y + Utils.randomFloat(-2, 2);
+      // Alternate between villages
+      const villageIdx = i < 4 ? 0 : 1;
+      const center = this.world.villageCenters[villageIdx] || { x: this.world.size / 2, y: this.world.size / 2 };
+      villager.x = center.x + Utils.randomFloat(-2, 2);
+      villager.y = center.y + Utils.randomFloat(-2, 2);
 
       this.villagers.push(villager);
     }
@@ -766,23 +1285,31 @@ class Game {
   }
 
   createStartingStructures() {
-    // Starting hut
-    this.world.addStructure({
-      type: 'hut',
-      x: this.world.villageCenter.x - 1,
-      y: this.world.villageCenter.y,
-      builtBy: this.villagers[0].id
-    });
+    // Create structures for each village
+    this.villages.forEach((village, idx) => {
+      const center = village.center;
 
-    // Starting fire
-    this.world.addStructure({
-      type: 'fire',
-      x: this.world.villageCenter.x,
-      y: this.world.villageCenter.y,
-      builtBy: this.villagers[0].id
-    });
+      // Starting hut
+      const hut = this.world.addStructure({
+        type: 'hut',
+        x: center.x - 1,
+        y: center.y,
+        builtBy: this.getVillagersForVillage(village.id)[0]?.id || null
+      });
+      if (hut) village.structureIds.push(hut.id);
 
-    this.resources.wood -= 5; // Fire cost
+      // Starting fire
+      const fire = this.world.addStructure({
+        type: 'fire',
+        x: center.x,
+        y: center.y,
+        builtBy: this.getVillagersForVillage(village.id)[0]?.id || null
+      });
+      if (fire) village.structureIds.push(fire.id);
+
+      // Deduct from village resources
+      village.resources.wood = Math.max(0, village.resources.wood - 5);
+    });
   }
 
   togglePause() {
@@ -859,9 +1386,24 @@ class Game {
     // Process event queue
     this.processEventQueue();
 
+    // Process diplomatic events for multi-village
+    this.processDiplomaticEvents();
+
+    // Process active raid
+    this.processRaid(scaledDelta);
+
+    // Process chieftan diplomatic decisions
+    this.processChieftanDecisions();
+
+    // Get active village's resources for HUD (or first village)
+    const activeVillage = this.selectedVillager?.villageId
+      ? this.getVillage(this.selectedVillager.villageId)
+      : this.villages[0];
+    const displayResources = activeVillage?.resources || { wood: 0, food: 0, water: 0, stone: 0, herbs: 0, clay: 0, fish: 0, thatch: 0, rareMaterials: 0 };
+
     // Update UI
-    this.ui.updateHUD(this.timeState, this.resources, this.paused);
-    this.ui.updateBuildMenu(this.resources);
+    this.ui.updateHUD(this.timeState, displayResources, this.paused, this.villages);
+    this.ui.updateBuildMenu(displayResources);
 
     // Update chronicle panel if open (refresh entries)
     const chroniclePanel = document.getElementById('chronicle-panel');
@@ -869,9 +1411,15 @@ class Game {
       this.ui.showChronicle(this.chronicle);
     }
 
+    // Update tech panel if open (refresh progress)
+    const techPanel = document.getElementById('tech-panel');
+    if (techPanel && !techPanel.classList.contains('hidden')) {
+      this.ui.showTechPanel();
+    }
+
     // Update selected villager panel
     if (this.selectedVillager) {
-      this.ui.updateNeedsBars(this.selectedVillager);
+      this.ui.updateVillagerPanel(this.selectedVillager);
       this.ui.updateFamilyList?.(this.selectedVillager);
     }
 
@@ -939,6 +1487,21 @@ class Game {
     this.updateRuleCompliance();
     this.planAutonomousConstruction();
 
+    // Evaluate war escalation between villages
+    this.evaluateWarEscalation();
+
+    // Request chieftan diplomacy for villages due for decisions
+    for (const village of this.villages) {
+      const nextDecisionDay = this.nextChieftanDecision[village.id] || 1;
+      if (this.timeState.day >= nextDecisionDay) {
+        this.requestChieftanDiplomacy(village.id);
+        // Schedule next decision in 3-5 days
+        const interval = CONSTANTS.DIPLOMACY.CHIEFTAN_DECISION_MIN_DAYS +
+          Math.floor(Math.random() * (CONSTANTS.DIPLOMACY.CHIEFTAN_DECISION_MAX_DAYS - CONSTANTS.DIPLOMACY.CHIEFTAN_DECISION_MIN_DAYS + 1));
+        this.nextChieftanDecision[village.id] = this.timeState.day + interval;
+      }
+    }
+
     // Daily chronicle summary
     const totalMood = this.villagers.reduce((sum, v) => sum + v.mood, 0);
     const avgMood = totalMood / this.villagers.length;
@@ -977,6 +1540,9 @@ class Game {
     this.deepenDailyRelationships();
     this.processPregnancies();
     this.processPartnerships();
+    this.processDivorces();
+    this.processAffairs();
+    this.processAffairDiscovery();
     this.processNewPregnancies();
   }
 
@@ -1752,6 +2318,40 @@ class Game {
         const action = this.sanitizeVillagerAction(rawAction);
         const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
         if (villager) {
+          // Critical needs override: if villager is starving/dehydrated/exhausted,
+          // skip non-survival actions to let them recover
+          const hasCriticalNeeds = villager.hunger < 30 || (villager.thirst ?? 100) < 30 || villager.energy < 15;
+          const isSurvivalAction = action.action === CONSTANTS.ACTIVITY.EATING ||
+            action.action === CONSTANTS.ACTIVITY.DRINKING ||
+            action.action === CONSTANTS.ACTIVITY.GATHERING ||
+            action.action === CONSTANTS.ACTIVITY.RESTING ||
+            action.action === CONSTANTS.ACTIVITY.SLEEPING ||
+            action.action === CONSTANTS.ACTIVITY.HUNTING ||
+            action.action === CONSTANTS.ACTIVITY.FISHING;
+
+          if (hasCriticalNeeds && !isSurvivalAction) {
+            // Force survival behavior instead of LLM action
+            if ((villager.thirst ?? 100) < 30 && this.resources.water > 0) {
+              villager.status = CONSTANTS.ACTIVITY.DRINKING;
+              villager.activity = 'Desperate for water';
+              villager.showSpeechBubble('💧', 'Needs water!');
+              continue;
+            }
+            if (villager.hunger < 30 && this.resources.food > 0) {
+              villager.status = CONSTANTS.ACTIVITY.EATING;
+              villager.activity = 'Desperate for food';
+              villager.showSpeechBubble('🍖', 'Needs food!');
+              continue;
+            }
+            if (villager.energy < 15) {
+              villager.status = CONSTANTS.ACTIVITY.RESTING;
+              villager.activity = 'Collapsing from exhaustion';
+              villager.showSpeechBubble('😫', 'Needs rest!');
+              continue;
+            }
+            continue; // Skip LLM action for critically needy villagers
+          }
+
           if ((villager.thirst ?? 100) < 35 && this.resources.water > 0) {
             villager.status = CONSTANTS.ACTIVITY.DRINKING;
             villager.activity = 'Drinking from village water stores';
@@ -2550,6 +3150,15 @@ Respond with JSON: {
       case 'ritual':
         this.performRitual(event.ritual);
         break;
+      case 'divorce':
+        this.handleDivorce(event.villager1, event.villager2, event.reason);
+        break;
+      case 'affair':
+        this.handleAffairStart(event.villager, event.affairPartner);
+        break;
+      case 'affairDiscovery':
+        this.handleAffairDiscovery(event.affectedSpouse, event.unfaithful, event.affairPartner);
+        break;
     }
   }
 
@@ -2575,7 +3184,9 @@ Respond with JSON: {
     this.chronicle.stats.deaths++;
 
     const isLegendary = villager.isChieftan || villager.mood > 80;
-    const chronicleText = `${villager.name} has passed away. ${villager.isChieftan ? 'The village mourns its leader.' : 'They will be remembered.'}`;
+    const causeText = villager.causeOfDeath ? ` (${villager.causeOfDeath})` : '';
+    const leaderText = villager.isChieftan ? 'The village mourns its leader.' : 'They will be remembered.';
+    const chronicleText = `${villager.name} has passed away${causeText}. ${leaderText}`;
 
     this.addChronicleEntry(chronicleText, isLegendary ? 'legendary' : 'normal');
 
@@ -2587,6 +3198,7 @@ Respond with JSON: {
     if (partner) {
       partner.partnerId = null;
       partner.partnerName = null;
+      partner.affairPartnerId = null; // Clear any affair too
       if (partner.expectingChild?.partnerId === villager.id) {
         partner.expectingChild.partnerName = villager.name;
       }
@@ -2598,8 +3210,35 @@ Respond with JSON: {
       this.villagers.splice(index, 1);
     }
 
+    // Remove from village villagerIds
+    for (const v of this.villages) {
+      const idx = v.villagerIds.indexOf(villager.id);
+      if (idx > -1) {
+        v.villagerIds.splice(idx, 1);
+      }
+    }
+
     // Funeral ritual
     this.performRitual(CONSTANTS.RITUAL.FUNERAL);
+  }
+
+  // Remove villager without funeral (for raids, conquest, etc.)
+  removeVillager(villager, causeOfDeath = 'killed in conflict') {
+    villager.causeOfDeath = causeOfDeath;
+
+    // Remove from villagers
+    const index = this.villagers.indexOf(villager);
+    if (index > -1) {
+      this.villagers.splice(index, 1);
+    }
+
+    // Remove from village villagerIds
+    for (const v of this.villages) {
+      const idx = v.villagerIds.indexOf(villager.id);
+      if (idx > -1) {
+        v.villagerIds.splice(idx, 1);
+      }
+    }
   }
 
   handleMarriage(villager1, villager2) {
@@ -2619,6 +3258,200 @@ Respond with JSON: {
 
     this.addChronicleEntry(`${villager1.name} and ${villager2.name} have joined as one. The village celebrates their union!`, 'celebration');
     this.performRitual(CONSTANTS.RITUAL.MARRIAGE);
+  }
+
+  handleDivorce(villager1, villager2, reason) {
+    if (!villager1 || !villager2) return;
+
+    // Clear partnership
+    villager1.partnerId = null;
+    villager1.partnerName = null;
+    villager2.partnerId = null;
+    villager2.partnerName = null;
+
+    // Clear any affairs
+    villager1.affairPartnerId = null;
+    villager2.affairPartnerId = null;
+
+    // Reduce relationship to acquaintance level
+    villager1.relationships[villager2.name] = 10;
+    villager2.relationships[villager1.name] = 10;
+
+    // Mood penalties
+    villager1.mood = Math.max(-100, villager1.mood - 15);
+    villager2.mood = Math.max(-100, villager2.mood - 15);
+
+    const reasonText = reason || 'irreconcilable differences';
+    this.addChronicleEntry(`${villager1.name} and ${villager2.name} have decided to part ways. The village whispers of ${reasonText}.`);
+  }
+
+  handleAffairStart(villager, affairPartner) {
+    if (!villager || !affairPartner) return;
+
+    villager.affairPartnerId = affairPartner.id;
+    affairPartner.affairPartnerId = villager.id;
+
+    // Add forbidden romance secret
+    const secret1 = {
+      type: 'forbidden_romance',
+      description: `${villager.name} has been seeing ${affairPartner.name} in secret.`,
+      secrecyLevel: 4,
+      discoveryTriggers: ['jealousy', 'witnessed_together'],
+      revealed: false,
+      discoveredBy: []
+    };
+    const secret2 = {
+      type: 'forbidden_romance',
+      description: `${affairPartner.name} has been seeing ${villager.name} in secret.`,
+      secrecyLevel: 4,
+      discoveryTriggers: ['jealousy', 'witnessed_together'],
+      revealed: false,
+      discoveredBy: []
+    };
+
+    villager.secrets.push(secret1);
+    affairPartner.secrets.push(secret2);
+
+    // Secret chronicle entry (only for player observation, not loud)
+    this.addChronicleEntry(`Whispers spread of a forbidden romance between ${villager.name} and ${affairPartner.name}...`, 'normal');
+  }
+
+  handleAffairDiscovery(spouse, unfaithful, affairPartner) {
+    if (!spouse || !unfaithful || !affairPartner) return;
+
+    // End the affair
+    unfaithful.affairPartnerId = null;
+    affairPartner.affairPartnerId = null;
+
+    // Mark secrets as revealed
+    const unfaithfulSecret = unfaithful.secrets.find(s => s.type === 'forbidden_romance' && !s.revealed);
+    if (unfaithfulSecret) {
+      unfaithfulSecret.revealed = true;
+      unfaithfulSecret.discoveredBy.push(spouse.name);
+    }
+
+    // Massive relationship damage between spouse and unfaithful
+    spouse.relationships[unfaithful.name] = Math.max(-100, spouse.relationships[unfaithful.name] - 50);
+    unfaithful.relationships[spouse.name] = Math.max(-100, unfaithful.relationships[spouse.name] - 50);
+
+    // Moderate relationship damage with affair partner (jealousy)
+    spouse.relationships[affairPartner.name] = Math.max(-100, (spouse.relationships[affairPartner.name] || 0) - 30);
+
+    // Mood penalties
+    spouse.mood = Math.max(-100, spouse.mood - 20);
+    unfaithful.mood = Math.max(-100, unfaithful.mood - 10);
+
+    // Public scandal
+    this.addChronicleEntry(`Scandal rocks the village! ${unfaithful.name}'s affair with ${affairPartner.name} has been revealed to ${spouse.name}!`, 'normal');
+
+    // Chance to trigger divorce immediately
+    if (Math.random() < 0.4) {
+      this.eventQueue.push({ type: 'divorce', villager1: spouse, villager2: unfaithful, reason: 'infidelity' });
+    }
+  }
+
+  processDivorces() {
+    const marriedVillagers = this.villagers.filter(v => v.partnerId);
+    const toDivorce = [];
+
+    for (const villager of marriedVillagers) {
+      const partner = this.villagers.find(v => v.id === villager.partnerId);
+      if (!partner) continue;
+
+      const daysSincePartnership = this.timeState.day - villager.lastPartnershipDay;
+      if (daysSincePartnership < 15) continue; // Minimum 15 days before divorce possible
+
+      const relationship = this.getMutualRelationship(villager, partner);
+
+      // Check divorce conditions
+      const lowRelationship = relationship < CONSTANTS.RELATIONSHIP.DIVORCE_THRESHOLD;
+      const extremeMood = villager.mood < -50 || partner.mood < -50;
+
+      if (lowRelationship && extremeMood && Math.random() < 0.15) {
+        toDivorce.push({ v1: villager, v2: partner, reason: 'grew apart' });
+      } else if (extremeMood && Math.random() < 0.08) {
+        toDivorce.push({ v1: villager, v2: partner, reason: 'cannot continue together' });
+      }
+    }
+
+    for (const pair of toDivorce) {
+      this.eventQueue.push({ type: 'divorce', villager1: pair.v1, villager2: pair.v2, reason: pair.reason });
+    }
+  }
+
+  processAffairs() {
+    // Find married villagers not already having an affair
+    const marriedAvailable = this.villagers.filter(v => v.partnerId && !v.affairPartnerId);
+    const toStartAffair = [];
+
+    for (const villager of marriedAvailable) {
+      const spouse = this.villagers.find(v => v.id === villager.partnerId);
+      if (!spouse) continue;
+
+      // Personality factors for affair likelihood
+      const personalityScore = (villager.personality.confident > 60 ? 1 : 0) +
+        ((villager.personality.sociable > 60 || villager.personality.empathetic > 50) ? 1 : 0);
+
+      if (personalityScore < 1) continue;
+
+      // Check for potential affair partner
+      const potentialPartners = this.villagers.filter(v =>
+        v.id !== villager.id &&
+        v.id !== villager.partnerId &&
+        !this.areCloseFamily(villager, v) &&
+        !v.partnerId // Prefer unmarried
+      );
+
+      for (const potential of potentialPartners) {
+        const mutual = this.getMutualRelationship(villager, potential);
+        if (mutual >= CONSTANTS.RELATIONSHIP.AFFAIR_MUTUAL_THRESHOLD) {
+          // Check if potential partner also interested
+          const reverseMutual = this.getMutualRelationship(potential, villager);
+          if (reverseMutual >= CONSTANTS.RELATIONSHIP.AFFAIR_MUTUAL_THRESHOLD - 10) {
+            // Personality check for potential
+            const partnerScore = (potential.personality.confident > 60 ? 1 : 0) +
+              ((potential.personality.sociable > 60 || potential.personality.empathetic > 50) ? 1 : 0);
+
+            if (partnerScore >= 1 && Math.random() < 0.005 * personalityScore * partnerScore) {
+              toStartAffair.push({ v1: villager, v2: potential });
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    for (const pair of toStartAffair) {
+      this.eventQueue.push({ type: 'affair', villager: pair.v1, affairPartner: pair.v2 });
+    }
+  }
+
+  processAffairDiscovery() {
+    const villagersWithAffairs = this.villagers.filter(v => v.affairPartnerId);
+
+    for (const villager of villagersWithAffairs) {
+      const affairPartner = this.villagers.find(v => v.id === villager.affairPartnerId);
+      if (!affairPartner) {
+        villager.affairPartnerId = null;
+        continue;
+      }
+
+      const spouse = this.villagers.find(v => v.id === villager.partnerId);
+      if (!spouse) continue;
+
+      // Calculate days affair ongoing
+      const affairSecret = villager.secrets.find(s => s.type === 'forbidden_romance' && !s.revealed);
+      if (!affairSecret) continue;
+
+      // Discovery triggers
+      const spouseJealousy = (spouse.relationships[affairPartner.name] || 0) < CONSTANTS.RELATIONSHIP.JEALOUSY_THRESHOLD;
+      const witnessed = Utils.distance(villager.x, villager.y, spouse.x, spouse.y) < 4;
+      const randomChance = Math.random() < 0.05;
+
+      if (spouseJealousy || witnessed || randomChance) {
+        this.eventQueue.push({ type: 'affairDiscovery', affectedSpouse: spouse, unfaithful: villager, affairPartner });
+      }
+    }
   }
 
   async performRitual(ritualDef) {
@@ -2865,7 +3698,7 @@ Respond with JSON: {
     }
 
     // Calculate progress based on research speed and time
-    const researchPerMs = (1 / (tech.researchTime * 24 * 60 * 60 * 1000)) * this.techState.researchSpeed;
+    const researchPerMs = (1 / (tech.researchTime * this.timeState.dayDuration)) * this.techState.researchSpeed;
     this.techState.currentResearch.progress += deltaTime * researchPerMs;
 
     // Check if research complete
@@ -3048,10 +3881,20 @@ Respond with JSON: {
     });
   }
 
-  findBuildLocation(structureId = null) {
-    // Find walkable tile near village center
-    const cx = this.world.villageCenter.x;
-    const cy = this.world.villageCenter.y;
+  findBuildLocation(structureId = null, villageId = null) {
+    // Find walkable tile near village - use selected village or first village
+    let targetVillage = null;
+    if (villageId) {
+      targetVillage = this.getVillage(villageId);
+    } else if (this.selectedVillager?.villageId) {
+      targetVillage = this.getVillage(this.selectedVillager.villageId);
+    } else if (this.villages.length > 0) {
+      targetVillage = this.villages[0];
+    }
+
+    const center = targetVillage?.center || { x: this.world.size / 2, y: this.world.size / 2 };
+    const cx = center.x;
+    const cy = center.y;
 
     for (let r = 1; r < 10; r++) {
       for (let dy = -r; dy <= r; dy++) {
@@ -3147,7 +3990,7 @@ Respond with JSON: {
     // Render minimap
     const minimap = document.getElementById('minimap-canvas');
     if (minimap) {
-      this.worldRenderer.renderMinimap(minimap, this.villagers, this.graphicsSettings.showLabels, this.constructionProjects);
+      this.worldRenderer.renderMinimap(minimap, this.villagers, this.graphicsSettings.showLabels, this.constructionProjects, this.villages);
     }
   }
 
@@ -3156,13 +3999,14 @@ Respond with JSON: {
       version: CONSTANTS.VERSION,
       world: this.world.serialize(),
       villagers: this.villagers.map(v => v.serialize()),
-      resources: this.resources,
+      villages: this.villages.map(v => v.serialize()),
       timeState: this.timeState,
       chronicle: this.chronicle,
-      government: this.government,
       constructionProjects: this.constructionProjects,
       graphicsSettings: this.graphicsSettings,
       techState: this.techState,
+      activeRaid: this.activeRaid,
+      diplomaticEvents: this.diplomaticEvents,
       savedAt: Date.now()
     };
 
@@ -3200,15 +4044,31 @@ Respond with JSON: {
         villager.activity = this.formatVillagerFacingText(villager.activity);
       });
 
-      // Restore resources
-      this.resources = this.normalizeResources(saveData.resources);
+      // Restore villages (new multi-village format)
+      if (saveData.villages) {
+        this.villages = saveData.villages.map(v => Village.deserialize(v));
+      } else {
+        // Backwards compatibility: create villages from single villageCenter
+        this.villages = [];
+        const v1 = new Village({
+          id: Utils.generateId(),
+          name: 'Simville',
+          center: this.world.villageCenters[0] || { x: this.world.size / 2, y: this.world.size / 2 },
+          villagerIds: this.villagers.filter(v => !v.villageId || v.villageId === 'village1').map(v => v.id),
+          resources: saveData.resources || this.getDefaultResources()
+        });
+        this.villages.push(v1);
+        // Assign villageId to villagers
+        this.villagers.forEach(v => {
+          if (!v.villageId) v.villageId = v1.id;
+        });
+      }
 
       // Restore time
       this.timeState = saveData.timeState;
 
       // Restore chronicle
       this.chronicle = saveData.chronicle;
-      this.government = this.normalizeGovernment(saveData.government);
       this.constructionProjects = saveData.constructionProjects || [];
       this.constructionAccumulator = 0;
 
@@ -3224,8 +4084,12 @@ Respond with JSON: {
         this.techState = { researched: [], currentResearch: null, researchSpeed: 1 };
       }
 
-      // Center camera
-      this.worldRenderer.centerOn(this.world.villageCenter.x, this.world.villageCenter.y);
+      // Restore inter-village state
+      this.activeRaid = saveData.activeRaid || null;
+      this.diplomaticEvents = saveData.diplomaticEvents || [];
+
+      // Center camera on first village
+      this.worldRenderer.centerOn(this.world.villageCenters[0]?.x || this.world.size / 2, this.world.villageCenters[0]?.y || this.world.size / 2);
 
       this.ui.showToast('Game loaded!');
     } catch (e) {

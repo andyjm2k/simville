@@ -400,12 +400,14 @@ Output JSON with an "actions" array. Each action has:
 - interactionType: talk|argue|share|help|romance|gossip if applicable
 
 Rules:
+- CRITICAL SURVIVAL PRIORITY: If ANY villager has hunger < 40, thirst < 40, or energy < 30, they MUST be assigned eating, drinking, gathering, hunting, fishing, or resting. NEVER assign idle, working, socializing, or building to a villager with critical needs.
 - Movement should be purposeful - if action is gathering, move towards resources
 - If socializing, move towards the other villager
 - If sleeping/eating/drinking, move towards a hut, fire, well, or water source
 - Active villagers should be working or gathering
 - Social villagers should seek out others
-- Move coordinates should be integers between 0-63`;
+- Move coordinates should be integers between 0-63
+- Villagers with hunger < 30 or thirst < 30 should always be assigned survival actions first`;
 
     const result = await this.generate(prompt);
 
@@ -534,6 +536,86 @@ Output JSON with:
       techId: currentResearch || allTechs.find(t => t.isAvailable)?.id || null,
       reason: 'Using village wisdom to guide research.'
     };
+  }
+
+  // Generate diplomatic action for chieftan regarding other village
+  async generateDiplomaticAction(village, otherVillage, context) {
+    const prompt = `As chieftan of "${village.name}", consider your relations with the rival village "${otherVillage.name}".
+
+CURRENT RELATIONS:
+- Your village: ${village.name} with ${village.villagerIds?.length || 0} villagers
+- Their village: ${otherVillage.name} with ${otherVillage.villagerIds?.length || 0} villagers
+- Current relation score: ${village.relations?.[otherVillage.id] || 0} (-100 to 100, negative is hostile)
+- At war: ${village.atWarWith?.includes(otherVillage.id) ? 'Yes' : 'No'}
+
+RESOURCES:
+- Your village: ${JSON.stringify(village.resources)}
+- Their village: ${JSON.stringify(otherVillage.resources)}
+
+VILLAGE STRENGTHS:
+- Your strength: ${context?.yourStrength || 0}
+- Their strength: ${context?.theirStrength || 0}
+
+Your people are watching your leadership. What action will you take regarding the rival village?
+
+Choose ONE action:
+1. "propose_trade" - Offer to exchange resources peacefully
+2. "propose_alliance" - Suggest working together
+3. "send_threat" - Warn them to stay away from your territory
+4. "raid" - Launch a raid against their village
+5. "ignore" - Focus on your own village for now
+6. "observe" - Send scouts to learn more about them
+
+Output JSON with:
+- action: the chosen action
+- targetVillage: "${otherVillage.name}"
+- reason: brief explanation of why
+- urgency: high|medium|low (affects how soon this is acted upon)`;
+
+    const result = await this.generate(prompt);
+
+    if (result && result.action) {
+      return result;
+    }
+
+    // Default fallback - ignore if relations are neutral
+    const relationScore = village.relations?.[otherVillage.id] || 0;
+    return {
+      action: relationScore < -30 ? 'send_threat' : 'ignore',
+      targetVillage: otherVillage.name,
+      reason: 'The wise leader knows when to wait.',
+      urgency: 'low'
+    };
+  }
+
+  // Generate inter-village relationship changes based on events
+  async generateRelationChanges(villages, recentEvents) {
+    if (villages.length < 2) return {};
+
+    const v1 = villages[0];
+    const v2 = villages[1];
+    const currentRelation = v1.relations?.[v2.id] || 0;
+
+    const prompt = `Two tribal villages share a continent. Their relations are currently ${currentRelation} (-100=war, 0=neutral, 100=allied).
+
+RECENT EVENTS affecting relations:
+${recentEvents.map(e => `- ${e}`).join('\n')}
+
+Based on these events, how should the relationship between these villages change?
+
+Output JSON with:
+- relationDelta: number between -10 and +10 (positive improves relations, negative worsens)
+- summary: brief explanation of why`;
+
+    const result = await this.generate(prompt);
+
+    if (result && typeof result.relationDelta === 'number') {
+      return {
+        [v2.id]: Utils.clamp(currentRelation + result.relationDelta, -100, 100)
+      };
+    }
+
+    return {};
   }
 }
 

@@ -2,7 +2,7 @@
 
 const CONSTANTS = {
   // Version
-  VERSION: '1.0.0',
+  VERSION: '1.1.0',
 
   // World
   WORLD: {
@@ -118,7 +118,10 @@ const CONSTANTS = {
     RIVAL_THRESHOLD: -25,
     FRIEND_THRESHOLD: 25,
     BEST_FRIEND_THRESHOLD: 75,
-    SOULMATE_THRESHOLD: 90
+    SOULMATE_THRESHOLD: 90,
+    DIVORCE_THRESHOLD: 15,
+    JEALOUSY_THRESHOLD: -30,
+    AFFAIR_MUTUAL_THRESHOLD: 65
   },
 
   // Ritual types
@@ -463,6 +466,41 @@ const CONSTANTS = {
     }
   },
 
+  // Village Relations (inter-village)
+  VILLAGE_RELATION: {
+    WAR_THRESHOLD: -60,
+    HOSTILE_THRESHOLD: -30,
+    NEUTRAL: 0,
+    FRIENDLY_THRESHOLD: 30,
+    ALLIANCE_THRESHOLD: 70
+  },
+
+  // War/Raid constants
+  WAR: {
+    RAID_COOLDOWN_DAYS: 5,
+    ATTACKER_STRENGTH_BASE: 0.6,
+    DEFENDER_ADVANTAGE: 0.3,
+    CONQUEST_THRESHOLD: 0.7, // % of villagers lost = conquest
+    MIN_RAIDERS: 2,
+    MAX_RAIDERS: 5
+  },
+
+  // Chieftan diplomacy
+  DIPLOMACY: {
+    CHIEFTAN_DECISION_MIN_DAYS: 3,
+    CHIEFTAN_DECISION_MAX_DAYS: 5,
+    HOSTILE_WAR_THRESHOLD_DAYS: 3 // Days of hostile relations before war triggers
+  },
+
+  // Village identity
+  VILLAGE: {
+    DEFAULT_RADIUS: 12,
+    MIN_DISTANCE_BETWEEN: 30,
+    STARTING_VILLAGERS: 3,
+    NAME_PREFIXES: ['Elder', 'Storm', 'River', 'Stone', 'Iron', 'Golden', 'Shadow', 'Wind', 'Thunder', 'Dawn', 'Mist', 'Ember'],
+    NAME_SUFFIXES: ['vale', 'hollow', 'fall', 'peak', 'ridge', 'glen', 'mere', 'fell', 'brook', 'watch', 'haven', 'crest']
+  },
+
   // Biome icons for tile rendering
   BIOME_ICON: {
     0: '🌊', // Ocean
@@ -504,3 +542,6 @@ Object.freeze(CONSTANTS.COLORS);
 Object.freeze(CONSTANTS.TECH);
 Object.freeze(CONSTANTS.BIOME_ICON);
 Object.freeze(CONSTANTS.INTERACTION);
+Object.freeze(CONSTANTS.VILLAGE_RELATION);
+Object.freeze(CONSTANTS.WAR);
+Object.freeze(CONSTANTS.VILLAGE);

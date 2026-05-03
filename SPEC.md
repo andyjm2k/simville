@@ -4,7 +4,7 @@
 
 **Project Name:** Simville
 **Project Type:** Real-time life simulation game (Electron desktop app)
-**Core Feature Summary:** An LLM-driven village simulation where tribal villagers with distinct personalities live, work, love, build, and expand in a procedurally generated continent with diverse biomes and resources.
+**Core Feature Summary:** An LLM-driven village simulation where tribal villagers with distinct personalities live, work, love, build, and expand in a procedurally generated continent with diverse biomes and resources. Features two rival villages that can compete, coexist, or conquer each other based on chieftan decisions and evolving simulation.
 **Target Users:** Fans of life simulation games (The Sims, Stardew Valley), AI-driven simulations, and interactive storytelling enthusiasts.
 
 ---
@@ -124,6 +124,8 @@ Each villager has these core attributes:
 - **Trust:** Builds through positive interactions
 - **Jealousy:** Can trigger conflicts in romantic triangles
 - **Family Bonds:** Parent-child relationships auto-set, improve over time
+- **Affairs:** Married villagers may have secret affairs (personality dependent)
+- **Divorce:** Couples with low relationship scores and poor mood may divorce
 
 ### 4.5 Life Stages
 
@@ -522,7 +524,7 @@ The Village Chronicle is an auto-generated historical record that captures the m
 | **Social Interaction** | Arguments, sharing, romance, helping | Notable villager interactions |
 | **Milestone** | Achievements unlocked | "First child born in the village!", "Village population reached 10" |
 | **Relationship Milestone** | New romances, friendships, rivalries | "Toma and Kana have become close companions" |
-| **Death Record** | Villager passes | Memorial entry with villager's legacy |
+| **Death Record** | Villager passes | Memorial entry with cause of death |
 | **Legend** | Extraordinary events | "The Great Flood of Year One" - persists in memory |
 | **Season Change** | New season begins | "The Wet Season has arrived..." |
 | **Resource Status** | Every 3 days | Food scarcity or plenty reports |
@@ -609,6 +611,24 @@ Gossip spreads through the village:
 3. Gossip travels 1-2 villagers per day cycle
 4. Secrets spread until they become village knowledge or are suppressed
 ```
+
+### 13.5 Divorce & Infidelity
+
+**Divorce Mechanics:**
+- Divorce can occur after 15+ days of marriage
+- Triggers when relationship < 15 and one partner has mood < -50
+- Clears partner links, reduces relationship to acquaintance level
+- Mood penalty for both former partners
+
+**Affair System:**
+- Married villagers (especially confident + sociable/empathetic) may start affairs
+- Requires high mutual relationship (65+) with potential affair partner
+- Creates hidden `forbidden_romance` secret on both participants
+- Affairs can be discovered through:
+  - Spouse jealousy (relationship with affair partner < -30)
+  - Being witnessed together (proximity < 4 tiles)
+  - Random chance (5% per day after 5 days)
+- Discovery causes: relationship damage, mood penalties, possible divorce
 
 ---
 
@@ -950,13 +970,126 @@ simville/
 - [ ] Goal completion triggers celebration
 - [ ] Failed goals affect villager mood
 
+### 20.11 Multi-Village System
+
+- [ ] Two villages spawn at world generation
+- [ ] Each village has separate resource pools
+- [ ] Villagers are assigned to a village via villageId
+- [ ] Inter-village relationships tracked (-100 to 100)
+- [ ] Villages can be at war, hostile, neutral, friendly, or allied
+- [ ] LLM-driven diplomatic decisions for chieftans
+- [ ] Conquest mechanics when one village overwhelms another
+- [ ] Minimap shows both village territories
+- [ ] Save/load supports multi-village state
+
 ---
 
-## 21. Future Enhancements (Out of Scope for V1)
+## 21. Multi-Village System
 
-- Multi-village diplomacy and war
+### 21.1 Village Structure
+
+Each village is an independent entity with:
+
+| Attribute | Description |
+|-----------|-------------|
+| **ID** | Unique identifier |
+| **Name** | Procedurally generated (e.g., "Elderglen", "Shadowmere") |
+| **Center** | X,Y coordinates of village center |
+| **Territory Radius** | 12 tiles claimed around center |
+| **Resources** | Separate pool per village |
+| **Villager IDs** | Population tracking |
+| **Relations** | Inter-village relationship scores |
+| **Government** | Village-specific rules |
+| **Culture** | Naming style, traits |
+| **War State** | At war with which villages |
+| **Raid Cooldown** | Days before village can launch another raid |
+
+### 21.2 Inter-Village Relations
+
+| Score Range | Relationship |
+|-------------|--------------|
+| -100 to -60 | War |
+| -59 to -30 | Hostile |
+| -29 to +29 | Neutral |
+| +30 to +69 | Friendly |
+| +70 to +100 | Allied |
+
+### 21.3 Diplomacy Actions
+
+Chieftans can choose these actions via LLM:
+- **Propose Trade** - Exchange resources peacefully (+15 relations)
+- **Propose Alliance** - Work together (+40 relations)
+- **Send Threat** - Warn about territory (-20 relations)
+- **Raid** - Launch attack on rival village (triggers combat)
+- **Ignore/Observe** - Focus internally (no effect)
+
+### 21.4 War & Conquest
+
+**War triggers when:**
+- Relationship drops below -60 for 3+ days (30% daily chance to escalate)
+- LLM chieftan decides to raid during hostile relations
+
+**Raid Phases:**
+1. **Planning** (1-2 days) - Raiders gather at edge of attacker territory
+2. **Moving** (1-2 days) - Raiders travel to target village
+3. **Attacking** - Combat resolution with casualties to both sides
+4. **Retreating** (1-2 days) - Raiders return home (success) or scatter (failure)
+
+**Combat Resolution:**
+- Attacker strength = raider_count × 0.6 × (0.8-1.2 random factor)
+- Defender strength = village_strength × 0.3 (home advantage)
+- Winner is higher strength after engagement
+- Casualties = 10-30% of villagers involved on losing side
+- Loot transferred on successful raid (5-15 food and wood)
+
+**Conquest occurs when:**
+- Defender loses 70%+ of villagers in a raid
+- `handleConquest()` transfers survivors to winning village
+- Chronicle records the fall of the conquered village
+
+### 21.5 Territory
+
+- Each village claims 12-tile radius
+- Gathering within territory benefits owning village
+- Border areas are contested zones
+- Structures belong to building village
+
+### 21.6 Chieftan Decision System
+
+- Every 3-5 days per village, chieftan requests a diplomatic decision via LLM
+- Decision added to `diplomaticEvents` queue for processing
+- Chieftans with `raidCooldown > 0` do not initiate new raids
+- War status affects available actions (can't propose alliance with enemy)
+
+### 21.7 Implementation Details
+
+**New Functions in game.js:**
+- `processRaid(deltaTime)` - Handles raid phases and combat resolution
+- `requestChieftanDiplomacy(villageId)` - LLM generates diplomatic action
+- `startRaid(attackerVillageId, targetVillageId)` - Initiates raid with raider selection
+- `processChieftanDecisions()` - Processes diplomatic event queue
+- `evaluateWarEscalation()` - Daily check for war triggers
+- `evaluateConquest(defenderId, attackerId)` - Checks conquest threshold
+- `removeVillager(villager, causeOfDeath)` - Removes villager without funeral
+
+**New Constants in constants.js:**
+- `DIPLOMACY.CHIEFTAN_DECISION_MIN_DAYS: 3`
+- `DIPLOMACY.CHIEFTAN_DECISION_MAX_DAYS: 5`
+- `DIPLOMACY.HOSTILE_WAR_THRESHOLD_DAYS: 3`
+
+**State Properties:**
+- `activeRaid` - Current raid state or null
+- `diplomaticEvents[]` - Pending diplomatic proposals
+- `nextChieftanDecision{}` - Maps villageId to next decision day
+- `hostileDaysCount{}` - Tracks days at hostile relations per village pair
+
+---
+
+## 22. Future Enhancements
+
 - Procedural storytelling with LLM-generated narratives
 - Weather events (storms, floods, droughts)
 - Disease and healing systems
 - Technology tree progression
 - Mobile companion app for remote monitoring
+
