@@ -48,6 +48,7 @@ class Game {
         marriages: 0
       }
     };
+    this.chronicleDirty = true;
 
     // Technology research state
     this.techState = {
@@ -829,8 +830,7 @@ class Game {
           if (!tile || !tile.walkable) continue;
           if (this.world.getResourceAt(x, y) || this.world.getStructureAt(x, y)) continue;
 
-          this.world.resources.push({
-            id: Utils.generateId(),
+          this.world.addResource({
             type: resourceDef.type,
             x,
             y,
@@ -853,6 +853,7 @@ class Game {
     this.world.generate();
     this.ensureVillageResourceAccess();
     this.worldRenderer.world = this.world;
+    this.worldRenderer.minimapCache = null;
     this.worldRenderer.camera.zoom = 1;
     this.selectedVillager = null;
     this.cameraTarget = null;
@@ -1310,10 +1311,11 @@ class Game {
     this.ui.updateHUD(this.timeState, displayResources, this.paused, this.villages);
     this.ui.updateBuildMenu(displayResources);
 
-    // Update chronicle panel if open (refresh entries)
+    // Update chronicle panel if open (refresh only when dirty)
     const chroniclePanel = document.getElementById('chronicle-panel');
-    if (chroniclePanel && !chroniclePanel.classList.contains('hidden')) {
+    if (chroniclePanel && !chroniclePanel.classList.contains('hidden') && this.chronicleDirty) {
       this.ui.showChronicle(this.chronicle);
+      this.chronicleDirty = false;
     }
 
     // Update tech panel if open (refresh progress)
@@ -1391,6 +1393,7 @@ class Game {
     this.updateFamilySimulation();
     this.updateRuleCompliance();
     this.planAutonomousConstruction();
+    this.chronicleDirty = true; // rules days-left / compliance may have changed
 
     // Evaluate war escalation between villages
     this.evaluateWarEscalation();
@@ -3656,6 +3659,7 @@ Respond with JSON: {
       day: this.timeState.day,
       text: `Discovered ${tech.name}: ${tech.description}`
     });
+    this.chronicleDirty = true;
   }
 
   async requestTechDecision() {
@@ -3858,6 +3862,7 @@ Respond with JSON: {
     };
 
     this.chronicle.entries.unshift(entry);
+    this.chronicleDirty = true;
 
     // Keep only last 100 entries
     if (this.chronicle.entries.length > 100) {
@@ -3871,6 +3876,7 @@ Respond with JSON: {
       text,
       day: this.timeState.day
     });
+    this.chronicleDirty = true;
 
     // Keep only last 20 legends
     if (this.chronicle.legendary.length > 20) {
@@ -4015,6 +4021,7 @@ Respond with JSON: {
 
       // Restore chronicle
       this.chronicle = saveData.chronicle;
+      this.chronicleDirty = true;
       this.constructionProjects = saveData.constructionProjects || [];
       this.constructionAccumulator = 0;
 
