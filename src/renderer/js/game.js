@@ -64,6 +64,9 @@ class Game {
       particles: true
     };
 
+    this.weather = { rain: false };
+    this.lastChronicleRefreshMs = 0;
+
     this.selectedVillager = null;
     this.isDragging = false;
     this.lastMousePos = { x: 0, y: 0 };
@@ -1020,24 +1023,33 @@ class Game {
 
   normalizeGoals(goals = [], villager = null) {
     const validGoals = Array.isArray(goals) ? goals : [];
-    return validGoals.map((goal, index) => ({
-      id: goal.id || Utils.generateId(),
-      type: this.normalizeGoalType(goal.type),
-      description: this.formatVillagerFacingText(goal.description || 'Pursue a personal ambition'),
-      difficulty: goal.difficulty || 'medium',
-      progress: Utils.clamp(Number(goal.progress) || 0, 0, 100),
-      completed: Boolean(goal.completed),
-      failed: Boolean(goal.failed),
-      target: this.resolveVillagerName(goal.target) || goal.target || null,
-      targetName: this.resolveVillagerName(goal.targetName || goal.target) || goal.targetName || null,
-      skill: this.normalizeSkillName(goal.skill || goal.focus || goal.target) || null,
-      milestones: Array.isArray(goal.milestones) ? goal.milestones : [],
-      lastPursuedDay: goal.lastPursuedDay || 0,
-      pursuitCount: goal.pursuitCount || 0,
-      reward: goal.reward || null,
-      rewardApplied: Boolean(goal.rewardApplied),
-      order: goal.order ?? index
-    }));
+    return validGoals.map((goal, index) => {
+      const type = this.normalizeGoalType(goal.type);
+      const hidden = goal.hidden === true ||
+        (goal.hidden == null && (type === 'aspiration' || type === 'legacy'));
+      const failureCondition = goal.failureCondition ||
+        (type === 'survival' ? 'food_critical' : null);
+      return {
+        id: goal.id || Utils.generateId(),
+        type,
+        description: this.formatVillagerFacingText(goal.description || 'Pursue a personal ambition'),
+        difficulty: goal.difficulty || 'medium',
+        progress: Utils.clamp(Number(goal.progress) || 0, 0, 100),
+        completed: Boolean(goal.completed),
+        failed: Boolean(goal.failed),
+        hidden,
+        failureCondition,
+        target: this.resolveVillagerName(goal.target) || goal.target || null,
+        targetName: this.resolveVillagerName(goal.targetName || goal.target) || goal.targetName || null,
+        skill: this.normalizeSkillName(goal.skill || goal.focus || goal.target) || null,
+        milestones: Array.isArray(goal.milestones) ? goal.milestones : [],
+        lastPursuedDay: goal.lastPursuedDay || 0,
+        pursuitCount: goal.pursuitCount || 0,
+        reward: goal.reward || null,
+        rewardApplied: Boolean(goal.rewardApplied),
+        order: goal.order ?? index
+      };
+    });
   }
 
   getFallbackGoals(villager) {
@@ -1311,11 +1323,15 @@ class Game {
     this.ui.updateHUD(this.timeState, displayResources, this.paused, this.villages);
     this.ui.updateBuildMenu(displayResources);
 
-    // Update chronicle panel if open (refresh only when dirty)
+    // Update chronicle panel if open (dirty or every ~2s — avoid per-frame DOM thrash)
     const chroniclePanel = document.getElementById('chronicle-panel');
-    if (chroniclePanel && !chroniclePanel.classList.contains('hidden') && this.chronicleDirty) {
-      this.ui.showChronicle(this.chronicle);
-      this.chronicleDirty = false;
+    if (chroniclePanel && !chroniclePanel.classList.contains('hidden')) {
+      const now = performance.now();
+      if (this.chronicleDirty || now - this.lastChronicleRefreshMs >= 2000) {
+        this.ui.showChronicle(this.chronicle);
+        this.chronicleDirty = false;
+        this.lastChronicleRefreshMs = now;
+      }
     }
 
     // Update tech panel if open (refresh progress)
@@ -1351,6 +1367,17 @@ class Game {
       if (timeOfDay === 'evening') {
         this.performChieftanMeeting();
       }
+
+      // Morning blessing fires at dawn, not midnight (SPEC §15)
+      if (timeOfDay === 'dawn') {
+        this.performRitual(CONSTANTS.RITUAL.MORNING_BLESSING);
+      }
+
+      // Occasional spirit communion at nightfall
+      if (timeOfDay === 'night' && this.timeState.day % 11 === 0) {
+        this.performRitual(CONSTANTS.RITUAL.SPIRIT_COMMUNION);
+      }
+
       const transitions = {
         'dawn': 'The first rays of sunlight pierce through the canopy, and the village stirs to life.',
         'morning': 'The village is bustling with activity as the morning warmth settles in.',
@@ -1380,10 +1407,37 @@ class Game {
     // Season change
     const season = Utils.getSeason(this.timeState.day);
     if (season.name !== this.timeState.season.name) {
+      const previousSeason = this.timeState.season;
       this.timeState.season = season;
       this.timeState.dayInSeason = 1;
-      this.addChronicleEntry(`The ${season.name} has begun.`);
+      this.onSeasonChange(previousSeason, season);
     }
+  }
+
+  onSeasonChange(previousSeason, newSeason) {
+    this.addChronicleEntry(`The ${newSeason.name} has begun.`);
+
+    // Harvest dance when leaving Harvest Season
+    if (previousSeason?.name === CONSTANTS.SEASON.HARVEST.name) {
+      this.performRitual(CONSTANTS.RITUAL.HARVEST_DANCE);
+    }
+
+    // Apply season moodMod to villagers at season start
+    const moodMod = newSeason.moodMod || 0;
+    if (moodMod !== 0) {
+      this.villagers.forEach(v => {
+        v.mood = Utils.clamp((v.mood || 0) + moodMod, -100, 100);
+      });
+    }
+
+    this.updateWeatherForSeason(newSeason);
+  }
+
+  updateWeatherForSeason(season = this.timeState.season) {
+    const isRainSeason = season?.name === CONSTANTS.SEASON.WET.name;
+    this.weather = {
+      rain: Boolean(isRainSeason && this.graphicsSettings?.particles)
+    };
   }
 
   onNewDay() {
@@ -1393,6 +1447,8 @@ class Game {
     this.updateFamilySimulation();
     this.updateRuleCompliance();
     this.planAutonomousConstruction();
+    this.applySeasonalDailyEffects();
+    this.updateWeatherForSeason();
     this.chronicleDirty = true; // rules days-left / compliance may have changed
 
     // Evaluate war escalation between villages
@@ -1439,11 +1495,33 @@ class Game {
       this.addChronicleEntry(`${notableVillager.name} has been seen ${mood} lately.`);
     }
 
-    // Ritual: Morning blessing
-    this.performRitual(CONSTANTS.RITUAL.MORNING_BLESSING);
+    // Prayer for Rain during Deep Dry when water is scarce
+    if (this.timeState.season?.name === CONSTANTS.SEASON.DEEP_DRY.name) {
+      const water = this.getResources().water || 0;
+      const waterCritical = water < Math.max(8, this.villagers.length * 3);
+      if (waterCritical && Math.random() < 0.35) {
+        this.performRitual(CONSTANTS.RITUAL.PRAYER_FOR_RAIN);
+      }
+    }
 
     // Gossip spread for revealed secrets (start of P3)
     this.processGossipSpread();
+  }
+
+  applySeasonalDailyEffects() {
+    const seasonName = this.timeState.season?.name;
+    if (seasonName !== CONSTANTS.SEASON.WET.name) return;
+
+    // Mild disease risk during Wet Season — small chance of light health drain
+    this.villagers.forEach(v => {
+      if (v.health <= 20) return;
+      if (Math.random() < 0.08) {
+        v.health = Math.max(1, v.health - Utils.randomFloat(1, 3));
+        if (Math.random() < 0.25) {
+          v.showSpeechBubble?.('🤒', 'Feeling unwell', 3000);
+        }
+      }
+    });
   }
 
   async processGossipSpread() {
@@ -1803,11 +1881,15 @@ class Game {
 
   produceStructureResources() {
     const seasonName = this.timeState.season?.name;
-    const farmMultiplier = seasonName === 'Harvest Season' ? 1.5 :
+    let farmMultiplier = seasonName === 'Harvest Season' ? 1.5 :
       seasonName === 'Deep Dry' ? 0.5 :
       seasonName === 'Dry Season' ? 0.8 : 1;
-    const wellMultiplier = seasonName === 'Deep Dry' ? 0.6 :
+    let wellMultiplier = seasonName === 'Deep Dry' ? 0.6 :
       seasonName === 'Dry Season' ? 0.8 : 1.1;
+
+    // Tech unlocks: agriculture boosts farms; water_management boosts wells
+    if (this.hasTech('agriculture')) farmMultiplier *= 1.2;
+    if (this.hasTech('water_management')) wellMultiplier *= 1.25;
 
     // Credit yields to the village that owns each structure
     for (const structure of this.world?.structures || []) {
@@ -1821,8 +1903,9 @@ class Game {
       } else if (structure.type === 'well') {
         this.addResource(CONSTANTS.RESOURCE.WATER, Math.round(18 * wellMultiplier), villageId);
       } else if (structure.type === 'workshop') {
-        this.addResource(CONSTANTS.RESOURCE.WOOD, 1, villageId);
-        this.addResource(CONSTANTS.RESOURCE.STONE, 1, villageId);
+        const craftBonus = this.hasTech('tool_crafting') ? 2 : 1;
+        this.addResource(CONSTANTS.RESOURCE.WOOD, craftBonus, villageId);
+        this.addResource(CONSTANTS.RESOURCE.STONE, craftBonus, villageId);
       }
     }
   }
@@ -1859,8 +1942,9 @@ class Game {
           `${villager.name} has grown into ${villager.lifeStage.name.toLowerCase()}hood.`,
           'normal'
         );
-        if (villager.lifeStage === CONSTANTS.LIFE_STAGE.YOUTH ||
-            villager.lifeStage?.name === 'Youth') {
+        // Coming of age only when becoming Adult (youth → adult)
+        if (villager.lifeStage === CONSTANTS.LIFE_STAGE.ADULT ||
+            villager.lifeStage?.name === 'Adult') {
           this.performRitual(CONSTANTS.RITUAL.COMING_OF_AGE);
         }
       }
@@ -1872,6 +1956,13 @@ class Game {
 
     this.villagers.forEach(villager => {
       villager.goals = this.normalizeGoals(villager.goals, villager);
+
+      // Evaluate stalled / failure conditions before pursuit
+      for (const goal of villager.goals) {
+        if (goal.completed || goal.failed) continue;
+        if (this.evaluateGoalFailure(villager, goal)) continue;
+      }
+
       const goal = villager.goals.find(g => !g.completed && !g.failed);
       if (!goal || !this.canPursuePersonalGoal(villager)) return;
 
@@ -1881,6 +1972,39 @@ class Game {
 
       this.pursuePersonalGoal(villager, goal);
     });
+  }
+
+  evaluateGoalFailure(villager, goal) {
+    if (goal.completed || goal.failed) return false;
+
+    // Stalled: not pursued for 20+ days with almost no progress
+    const lastDay = goal.lastPursuedDay || 0;
+    const daysSincePursuit = this.timeState.day - lastDay;
+    if (lastDay > 0 && daysSincePursuit > 20 && (goal.progress || 0) < 10) {
+      this.failGoal(villager, goal, 'abandoned after long neglect');
+      return true;
+    }
+
+    // Survival / food_critical goals fail when food is gone and hunger is critical
+    if (goal.type === 'survival' || goal.failureCondition === 'food_critical') {
+      const food = this.getResources(villager.villageId).food || 0;
+      if (food <= 0 && (villager.hunger || 0) < 20) {
+        this.failGoal(villager, goal, 'could not keep the village fed');
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  failGoal(villager, goal, reason) {
+    goal.failed = true;
+    goal.failReason = reason;
+    villager.mood = Utils.clamp((villager.mood || 0) - 25, -100, 100);
+    this.addChronicleEntry(
+      `${villager.name}'s goal failed (${reason}): ${goal.description}`,
+      'normal'
+    );
   }
 
   canPursuePersonalGoal(villager) {
@@ -2682,13 +2806,32 @@ class Game {
   }
 
   harvestResourceNode(villager, resource, skillLevel = 1) {
-    const gathered = this.world.harvestResource(resource.id, Math.max(1, skillLevel));
+    const bonusSkill = skillLevel * this.getGatherTechMultiplier(resource.type);
+    const gathered = this.world.harvestResource(resource.id, Math.max(1, bonusSkill));
     if (gathered <= 0) return 0;
 
     this.addResource(resource.type, gathered, villager.villageId, villager.x, villager.y);
     villager.addInteraction('gather', resource.type, `Gathered ${gathered} ${resource.type}`);
     villager.energy = Math.max(0, villager.energy - 0.5);
     return gathered;
+  }
+
+  getGatherTechMultiplier(resourceType) {
+    let mult = 1;
+    if (this.hasTech('agriculture') &&
+        (resourceType === CONSTANTS.RESOURCE.FOOD || resourceType === CONSTANTS.RESOURCE.THATCH)) {
+      mult *= 1.15;
+    }
+    if (this.hasTech('hunting_techniques') && resourceType === CONSTANTS.RESOURCE.FOOD) {
+      mult *= 1.1;
+    }
+    if (this.hasTech('fishing_methods') && resourceType === CONSTANTS.RESOURCE.FISH) {
+      mult *= 1.2;
+    }
+    if (this.hasTech('tool_crafting')) {
+      mult *= 1.05;
+    }
+    return mult;
   }
 
   handleGathering(villager, resourceType) {
@@ -2706,7 +2849,7 @@ class Game {
     }
 
     if (resource) {
-      const skillLevel = villager.skills.gathering || 1;
+      const skillLevel = (villager.skills.gathering || 1) * this.getGatherTechMultiplier(resourceType);
       const gathered = this.world.harvestResource(resource.id, skillLevel);
 
       if (gathered > 0) {
@@ -3382,6 +3525,7 @@ Respond with JSON: {
   }
 
   async performRitual(ritualDef) {
+    if (!ritualDef) return;
     const participants = this.villagers.filter(v => {
       if (ritualDef.participants === 'all') return v.status !== CONSTANTS.ACTIVITY.SLEEPING;
       if (ritualDef.participants === 'adults') {
@@ -3406,9 +3550,31 @@ Respond with JSON: {
       });
     });
 
-    // Generate ritual narrative
+    // Generate ritual narrative and record in chronicle (do not discard)
     const leader = participants.find(v => v.isChieftan) || participants[0];
-    const narrative = await llm.generateRitualDialogue(ritualDef, leader, participants);
+    let narrative = null;
+    try {
+      narrative = await llm.generateRitualDialogue(ritualDef, leader, participants);
+    } catch (e) {
+      narrative = null;
+    }
+
+    const narrationText = typeof narrative === 'string'
+      ? narrative
+      : (narrative?.narration || narrative?.chronicle || null);
+    const chant = typeof narrative === 'object' ? narrative?.chant : null;
+
+    if (narrationText) {
+      const entry = chant
+        ? `${ritualDef.emoji || ''} ${ritualDef.name}: ${narrationText} "${chant}"`
+        : `${ritualDef.emoji || ''} ${ritualDef.name}: ${narrationText}`;
+      this.addChronicleEntry(entry.trim(), 'celebration');
+    } else {
+      this.addChronicleEntry(
+        `${ritualDef.emoji || ''} The village holds a ${ritualDef.name}.`,
+        'celebration'
+      );
+    }
 
     // Show speech bubbles
     participants.slice(0, 5).forEach(v => {
@@ -3765,11 +3931,18 @@ Respond with JSON: {
   }
 
   getResearchedTechs() {
-    return this.techState.researched.map(id => CONSTANTS.TECH[id]).filter(Boolean);
+    return this.techState.researched
+      .map(id => CONSTANTS.TECH[id] || Object.values(CONSTANTS.TECH).find(t => t.id === id))
+      .filter(Boolean);
   }
 
   hasTech(techId) {
-    return this.techState.researched.includes(techId);
+    if (!techId) return false;
+    if (this.techState.researched.includes(techId)) return true;
+    const tech = CONSTANTS.TECH[techId] ||
+      Object.values(CONSTANTS.TECH).find(t => t.id === techId);
+    if (!tech) return false;
+    return this.techState.researched.includes(tech.id);
   }
 
   getStructureDefById(structureId) {
@@ -3868,6 +4041,32 @@ Respond with JSON: {
     if (this.chronicle.entries.length > 100) {
       this.chronicle.entries.pop();
     }
+
+    // Fire-and-forget LLM enrichment for legendary/celebration (don't block game loop)
+    if (type === 'legendary' || type === 'celebration') {
+      this.enrichChronicleEntry(entry).catch(() => {});
+    }
+  }
+
+  async enrichChronicleEntry(entry) {
+    if (!entry || typeof llm?.generateChronicleEntry !== 'function') return;
+
+    const avgMood = this.villagers.length
+      ? this.villagers.reduce((sum, v) => sum + (v.mood || 0), 0) / this.villagers.length
+      : 0;
+
+    try {
+      const enriched = await llm.generateChronicleEntry(
+        { description: entry.text, day: entry.day },
+        { averageMood: avgMood }
+      );
+      if (enriched && typeof enriched === 'string' && enriched.trim() && enriched.trim() !== entry.text) {
+        entry.text = enriched.trim();
+        this.chronicleDirty = true;
+      }
+    } catch (e) {
+      // Keep original template text on failure
+    }
   }
 
   addLegendaryEntry(title, text) {
@@ -3908,7 +4107,8 @@ Respond with JSON: {
     this.worldRenderer.render(
       timeOfDay,
       this.timeState.season,
-      this.graphicsSettings.showLabels
+      this.graphicsSettings.showLabels,
+      this.weather
     );
 
     this.constructionProjects.forEach(project => {
@@ -3977,6 +4177,7 @@ Respond with JSON: {
       // Restore world
       this.world = World.deserialize(saveData.world);
       this.worldRenderer.world = this.world;
+      this.worldRenderer.minimapCache = null;
       this.worldRenderer.camera.zoom = 1;
       this.selectedVillager = null;
       this.cameraTarget = null;

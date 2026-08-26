@@ -179,6 +179,24 @@ const CONSTANTS = {
       moodBoost: 20,
       socialGain: 15,
       emoji: '💒'
+    },
+    PRAYER_FOR_RAIN: {
+      name: 'Prayer for Rain',
+      time: 'deep_dry',
+      participants: 'all',
+      duration: 12,
+      moodBoost: 8,
+      socialGain: 4,
+      emoji: '🌧️'
+    },
+    SPIRIT_COMMUNION: {
+      name: 'Spirit Communion',
+      time: 'night',
+      participants: 'adults',
+      duration: 15,
+      moodBoost: 12,
+      socialGain: 6,
+      emoji: '👻'
     }
   },
 

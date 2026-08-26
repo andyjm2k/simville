@@ -888,7 +888,7 @@ class WorldRenderer {
     return { x, y };
   }
 
-  render(timeOfDay, season, showLabels = true) {
+  render(timeOfDay, season, showLabels = true, weather = null) {
     const ctx = this.ctx;
     const scale = this.camera.zoom * CONSTANTS.WORLD.PIXEL_SCALE;
 
@@ -961,6 +961,23 @@ class WorldRenderer {
     if (season) {
       ctx.fillStyle = `${season.color}15`;
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+
+    // Rain weather tint when particles enabled for wet season
+    if (weather?.rain) {
+      ctx.fillStyle = 'rgba(74, 144, 217, 0.12)';
+      ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+      ctx.strokeStyle = 'rgba(180, 210, 240, 0.35)';
+      ctx.lineWidth = 1;
+      const streakCount = 40;
+      for (let i = 0; i < streakCount; i++) {
+        const x = ((i * 97) + (Date.now() / 30) % this.canvas.width) % this.canvas.width;
+        const y = ((i * 53) + (Date.now() / 20)) % this.canvas.height;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - 2, y + 10);
+        ctx.stroke();
+      }
     }
 
     // Night darkness (apply to areas without fire light)

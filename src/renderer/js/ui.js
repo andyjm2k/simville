@@ -409,9 +409,9 @@ class UIManager {
 
     this.updateFamilyList(villager);
 
-    // Goals - show active goals
+    // Goals - show active non-hidden goals (aspirations often hidden)
     this.elements.villagerGoalsList.innerHTML = '';
-    const activeGoals = villager.goals?.filter(g => !g.completed && !g.failed) || [];
+    const activeGoals = villager.goals?.filter(g => !g.completed && !g.failed && !g.hidden) || [];
     if (activeGoals.length === 0) {
       const li = document.createElement('li');
       li.className = 'goal-item';
