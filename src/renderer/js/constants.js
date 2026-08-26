@@ -496,7 +496,7 @@ const CONSTANTS = {
   VILLAGE: {
     DEFAULT_RADIUS: 12,
     MIN_DISTANCE_BETWEEN: 30,
-    STARTING_VILLAGERS: 3,
+    STARTING_VILLAGERS: 5,
     NAME_PREFIXES: ['Elder', 'Storm', 'River', 'Stone', 'Iron', 'Golden', 'Shadow', 'Wind', 'Thunder', 'Dawn', 'Mist', 'Ember'],
     NAME_SUFFIXES: ['vale', 'hollow', 'fall', 'peak', 'ridge', 'glen', 'mere', 'fell', 'brook', 'watch', 'haven', 'crest']
   },

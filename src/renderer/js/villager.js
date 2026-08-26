@@ -164,22 +164,28 @@ class Villager {
 
     // Recover hunger when eating. Food is consumed in small portions so eating
     // cannot heal hunger for free.
-    if (this.status === CONSTANTS.ACTIVITY.EATING && game?.resources?.food > 0) {
-      const hungerBefore = this.hunger;
-      const hungerGain = Math.min(100 - this.hunger, 35 * hourFraction);
-      const foodNeeded = hungerGain / 25;
-      const foodUsed = Math.min(game.resources.food, foodNeeded);
-      game.resources.food = Math.max(0, game.resources.food - foodUsed);
-      this.hunger = Math.min(100, hungerBefore + foodUsed * 25);
+    if (this.status === CONSTANTS.ACTIVITY.EATING && game?.getResources) {
+      const resources = game.getResources(this.villageId);
+      if ((resources.food || 0) > 0) {
+        const hungerBefore = this.hunger;
+        const hungerGain = Math.min(100 - this.hunger, 35 * hourFraction);
+        const foodNeeded = hungerGain / 25;
+        const foodUsed = Math.min(resources.food, foodNeeded);
+        resources.food = Math.max(0, resources.food - foodUsed);
+        this.hunger = Math.min(100, hungerBefore + foodUsed * 25);
+      }
     }
 
-    if (this.status === CONSTANTS.ACTIVITY.DRINKING && game?.resources?.water > 0) {
-      const thirstBefore = this.thirst;
-      const thirstGain = Math.min(100 - this.thirst, 45 * hourFraction);
-      const waterNeeded = thirstGain / 35;
-      const waterUsed = Math.min(game.resources.water, waterNeeded);
-      game.resources.water = Math.max(0, game.resources.water - waterUsed);
-      this.thirst = Math.min(100, thirstBefore + waterUsed * 35);
+    if (this.status === CONSTANTS.ACTIVITY.DRINKING && game?.getResources) {
+      const resources = game.getResources(this.villageId);
+      if ((resources.water || 0) > 0) {
+        const thirstBefore = this.thirst;
+        const thirstGain = Math.min(100 - this.thirst, 45 * hourFraction);
+        const waterNeeded = thirstGain / 35;
+        const waterUsed = Math.min(resources.water, waterNeeded);
+        resources.water = Math.max(0, resources.water - waterUsed);
+        this.thirst = Math.min(100, thirstBefore + waterUsed * 35);
+      }
     }
 
     // Health effects
@@ -203,12 +209,15 @@ class Villager {
       this.health = Math.min(100, this.health + 1 * hourFraction);
     }
 
-    if (this.health < 60 && this.hunger > 20 && this.thirst > 20 && game?.resources?.herbs > 0) {
-      const healthGain = Math.min(100 - this.health, 8 * hourFraction);
-      const herbsNeeded = healthGain / 20;
-      const herbsUsed = Math.min(game.resources.herbs, herbsNeeded);
-      game.resources.herbs = Math.max(0, game.resources.herbs - herbsUsed);
-      this.health = Math.min(100, this.health + herbsUsed * 20);
+    if (this.health < 60 && this.hunger > 20 && this.thirst > 20 && game?.getResources) {
+      const resources = game.getResources(this.villageId);
+      if ((resources.herbs || 0) > 0) {
+        const healthGain = Math.min(100 - this.health, 8 * hourFraction);
+        const herbsNeeded = healthGain / 20;
+        const herbsUsed = Math.min(resources.herbs, herbsNeeded);
+        resources.herbs = Math.max(0, resources.herbs - herbsUsed);
+        this.health = Math.min(100, this.health + herbsUsed * 20);
+      }
     }
   }
 

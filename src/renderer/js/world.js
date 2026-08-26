@@ -667,11 +667,13 @@ class World {
   }
 
   addStructure(structure) {
-    this.structures.push({
+    const created = {
       id: Utils.generateId(),
       ...structure,
       builtAt: game ? game.timeState.day : 1
-    });
+    };
+    this.structures.push(created);
+    return created;
   }
 
   getStructureAt(x, y) {

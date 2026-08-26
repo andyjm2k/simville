@@ -40,6 +40,9 @@ class Village {
 
     // Structures owned by this village
     this.structureIds = data.structureIds || [];
+
+    // Conquest baseline population
+    this.originalPopulation = data.originalPopulation ?? null;
   }
 
   generateVillageName() {
@@ -146,7 +149,8 @@ class Village {
       culture: { ...this.culture },
       atWarWith: [...this.atWarWith],
       raidCooldown: this.raidCooldown,
-      structureIds: [...this.structureIds]
+      structureIds: [...this.structureIds],
+      originalPopulation: this.originalPopulation
     };
   }
 

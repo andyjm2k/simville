@@ -76,6 +76,11 @@ class Game {
     this.diplomaticEvents = [];  // Pending proposals
     this.nextChieftanDecision = {};  // { villageId: dayNumber } - when to request next decision
     this.hostileDaysCount = {};  // { villageId_pair: days } - tracking days at hostile relations
+
+    // Economy / raid systems (instantiated once villages exist)
+    this.economy = null;
+    this.raidSystem = null;
+    this.hudVillageId = null;
   }
 
   // Get village by ID
@@ -118,56 +123,39 @@ class Game {
     }
   }
 
-  // Assign villagers to villages
+  // Assign villagers to villages by proximity; one chieftan per village
   assignVillagersToVillages() {
-    const baseOffset = 5;
+    // Clear prior assignments
+    this.villages.forEach(v => { v.villagerIds = []; });
 
-    for (let i = 0; i < this.villages.length; i++) {
-      const village = this.villages[i];
-      const center = village.center;
+    // Prefer: assign each villager to nearest village center by distance
+    this.villagers.forEach(v => {
+      let best = this.villages[0];
+      let bestDist = Infinity;
+      for (const village of this.villages) {
+        const d = Utils.distance(v.x, v.y, village.center.x, village.center.y);
+        if (d < bestDist) { bestDist = d; best = village; }
+      }
+      v.villageId = best.id;
+      best.villagerIds.push(v.id);
+    });
 
-      // Get villagers for this village (by position or index)
-      const villageVillagers = this.villagers.filter(v => {
-        if (v.villageId) return v.villageId === village.id;
-        // Fallback: assign by index round-robin
-        return true; // Will filter below
-      });
-
-      // Assign first portion to each village based on index
-      const startIdx = i * CONSTANTS.VILLAGE.STARTING_VILLAGERS;
-      const endIdx = startIdx + CONSTANTS.VILLAGE.STARTING_VILLAGERS;
-
-      this.villagers.forEach((v, idx) => {
-        if (idx === 0) {
-          // First villager (chieftan) goes to village 0
-          v.villageId = this.villages[0].id;
-          this.villages[0].villagerIds.push(v.id);
-        } else if (idx === baseOffset) {
-          // Index baseOffset goes to village 1
-          if (this.villages[1]) {
-            v.villageId = this.villages[1].id;
-            this.villages[1].villagerIds.push(v.id);
-          }
-        } else if (idx > 0 && idx < baseOffset) {
-          // Others to village 0
-          v.villageId = this.villages[0].id;
-          this.villages[0].villagerIds.push(v.id);
-        }
-      });
-    }
-
-    // Make sure chieftans are assigned correctly
+    // Ensure exactly one chieftan per village
     this.villages.forEach(village => {
       const villagers = this.getVillagersForVillage(village.id);
-      const chieftan = villagers.find(v => v.isChieftan);
-      if (!chieftan && villagers.length > 0) {
-        // Make first adult chieftan if none
-        const adult = villagers.find(v => v.lifeStage === CONSTANTS.LIFE_STAGE.ADULT);
-        if (adult) {
-          adult.isChieftan = true;
-          adult.title = 'Chieftan';
+      villagers.forEach(v => {
+        if (v.isChieftan) {
+          v.isChieftan = false;
+          if (v.title === 'Chieftan') v.title = v.determineTitle?.() || 'Tribesman';
         }
+      });
+      const adult = villagers.find(v => v.age >= 18) || villagers[0];
+      if (adult) {
+        adult.isChieftan = true;
+        adult.title = 'Chieftan';
       }
+      // Set conquest baseline
+      village.originalPopulation = villagers.length;
     });
   }
 
@@ -177,27 +165,41 @@ class Game {
     const winningVillage = this.getVillage(winningVillageId);
     if (!losingVillage || !winningVillage) return;
 
-    const villagers = this.getVillagersForVillage(losingVillageId);
-    const chieftan = villagers.find(v => v.isChieftan);
+    const losingVillagers = this.getVillagersForVillage(losingVillageId);
+    const priorWinningIds = new Set(winningVillage.villagerIds || []);
 
     // Chronicle entry
     this.addChronicleEntry(`The ${losingVillage.name} has been conquered by ${winningVillage.name}! The era of ${losingVillage.name} ends as its people merge with their new allies.`);
 
+    // Transfer resources before village is removed
+    if (this.economy) {
+      this.economy.transferAllResources(losingVillage, winningVillage);
+    }
+
     // Transfer villagers to winning village
-    villagers.forEach(v => {
+    losingVillagers.forEach(v => {
       v.villageId = winningVillageId;
       winningVillage.villagerIds.push(v.id);
+    });
 
-      // Remove enemy status between villagers
-      const winningVillagers = this.getVillagersForVillage(winningVillageId);
-      winningVillagers.forEach(wv => {
-        const keyToRemove = Object.keys(wv.relationships).find(k =>
-          k.toLowerCase().includes(losingVillage.name.toLowerCase())
-        );
-        if (keyToRemove) {
-          delete wv.relationships[keyToRemove];
+    // Clear enemy relationship entries by villager identity (not village-name substring)
+    const losingNames = new Set(losingVillagers.map(v => v.name));
+    const winningRoster = this.getVillagersForVillage(winningVillageId);
+    winningRoster.forEach(wv => {
+      if (!wv.relationships) return;
+      for (const name of losingNames) {
+        if (wv.relationships[name] !== undefined && priorWinningIds.has(wv.id)) {
+          delete wv.relationships[name];
         }
-      });
+      }
+      if (!priorWinningIds.has(wv.id)) {
+        for (const other of winningRoster) {
+          if (!priorWinningIds.has(other.id)) continue;
+          if (wv.relationships[other.name] !== undefined) {
+            delete wv.relationships[other.name];
+          }
+        }
+      }
     });
 
     // Transfer structures
@@ -213,6 +215,10 @@ class Game {
 
     // End any wars
     winningVillage.atWarWith = winningVillage.atWarWith.filter(id => id !== losingVillageId);
+
+    if (this.hudVillageId === losingVillageId) {
+      this.hudVillageId = winningVillageId;
+    }
   }
 
   // Trigger war between villages
@@ -266,105 +272,7 @@ class Game {
 
   // Process active raid if one is ongoing
   processRaid(deltaTime) {
-    if (!this.activeRaid) return;
-
-    const attacker = this.getVillage(this.activeRaid.attackerVillageId);
-    const defender = this.getVillage(this.activeRaid.targetVillageId);
-    if (!attacker || !defender) {
-      this.activeRaid = null;
-      return;
-    }
-
-    const phase = this.activeRaid.phase;
-
-    switch (phase) {
-      case 'planning': {
-        // Raiders gather at edge of attacker territory - advance after 1-2 days
-        this.activeRaid.planningTimer += deltaTime / this.timeState.dayDuration;
-        if (this.activeRaid.planningTimer >= 1.5) {
-          this.activeRaid.phase = 'moving';
-          this.activeRaid.planningTimer = 0;
-          this.addChronicleEntry(`A raiding party from ${attacker.name} sets out toward ${defender.name}!`);
-        }
-        break;
-      }
-      case 'moving': {
-        // Raiders travel toward defender - advance after 1-2 days
-        this.activeRaid.travelTimer += deltaTime / this.timeState.dayDuration;
-        if (this.activeRaid.travelTimer >= 1.5) {
-          this.activeRaid.phase = 'attacking';
-          this.activeRaid.travelTimer = 0;
-          this.addChronicleEntry(`The raiders from ${attacker.name} arrive at ${defender.name}! Combat begins!`);
-        }
-        break;
-      }
-      case 'attacking': {
-        // Combat resolution happens once, then move to retreating
-        const attackerStrength = this.activeRaid.raiderIds.length * CONSTANTS.WAR.ATTACKER_STRENGTH_BASE * (0.8 + Math.random() * 0.4);
-        const defenderStrength = defender.calculateStrength(this.villagers) * CONSTANTS.WAR.DEFENDER_ADVANTAGE;
-        const attackerWon = attackerStrength > defenderStrength;
-
-        // Calculate casualties
-        const raiderCount = this.activeRaid.raiderIds.length;
-        if (!attackerWon) {
-          // Raiders take heavy losses
-          const casualties = Math.floor(raiderCount * (0.2 + Math.random() * 0.3));
-          for (let i = 0; i < casualties && this.activeRaid.raiderIds.length > 0; i++) {
-            const raiderId = this.activeRaid.raiderIds.pop();
-            const raider = this.villagers.find(v => v.id === raiderId);
-            if (raider) {
-              this.addChronicleEntry(`${raider.name} was slain in the raid on ${defender.name}.`);
-              this.removeVillager(raider);
-            }
-          }
-          this.addChronicleEntry(`The raid on ${defender.name} failed! The raiders scatter in defeat.`);
-        } else {
-          // Raiders succeed - defenders take casualties
-          const defenderCasualties = Math.floor(raiderCount * (0.15 + Math.random() * 0.25));
-          const defenderVillagers = this.getVillagersForVillage(defender.id);
-          for (let i = 0; i < defenderCasualties && defenderVillagers.length > 0; i++) {
-            const idx = Math.floor(Math.random() * defenderVillagers.length);
-            const victim = defenderVillagers[idx];
-            if (victim) {
-              this.addChronicleEntry(`${victim.name} of ${defender.name} was killed in the raid.`);
-              this.removeVillager(victim);
-              defenderVillagers.splice(idx, 1);
-            }
-          }
-
-          // Loot resources
-          const lootAmount = 5 + Math.floor(Math.random() * 10);
-          const stolenFood = Math.min(defender.resources.food, lootAmount);
-          const stolenWood = Math.min(defender.resources.wood, lootAmount);
-          attacker.resources.food += stolenFood;
-          attacker.resources.wood += stolenWood;
-          defender.resources.food -= stolenFood;
-          defender.resources.wood -= stolenWood;
-
-          this.addChronicleEntry(`The raid succeeds! ${attacker.name} claims ${stolenFood} food and ${stolenWood} wood from ${defender.name}.`);
-
-          // Set retreat timer
-          this.activeRaid.phase = 'retreating';
-          this.activeRaid.loot = { food: stolenFood, wood: stolenWood };
-        }
-
-        // Set attacker raid cooldown
-        attacker.raidCooldown = CONSTANTS.WAR.RAID_COOLDOWN_DAYS;
-
-        // Evaluate conquest after raid
-        this.evaluateConquest(defender.id, attacker.id);
-        break;
-      }
-      case 'retreating': {
-        // Raiders return home - advance after 1-2 days
-        this.activeRaid.retreatTimer += deltaTime / this.timeState.dayDuration;
-        if (this.activeRaid.retreatTimer >= 1.5) {
-          this.addChronicleEntry(`The raiding party from ${attacker.name} returns home victorious!`);
-          this.activeRaid = null;
-        }
-        break;
-      }
-    }
+    this.raidSystem?.processRaid(deltaTime);
   }
 
   // Request chieftan diplomacy decision for a village
@@ -414,40 +322,7 @@ class Game {
 
   // Start a raid from attacker to defender
   startRaid(attackerVillageId, targetVillageId) {
-    const attacker = this.getVillage(attackerVillageId);
-    const defender = this.getVillage(targetVillageId);
-    if (!attacker || !defender) return;
-    if (this.activeRaid) return; // Only one raid at a time
-
-    // Select raiders from attacker village
-    const raiderCount = CONSTANTS.WAR.MIN_RAIDERS + Math.floor(Math.random() * (CONSTANTS.WAR.MAX_RAIDERS - CONSTANTS.WAR.MIN_RAIDERS + 1));
-    const adultVillagers = this.getVillagersForVillage(attackerVillageId).filter(v => v.lifeStage !== CONSTANTS.LIFE_STAGE.CHILD);
-    const availableRaiders = Math.min(raiderCount, Math.floor(adultVillagers.length / 2));
-
-    if (availableRaiders < CONSTANTS.WAR.MIN_RAIDERS) {
-      this.addChronicleEntry(`${attacker.name} wanted to raid ${defender.name} but lacked enough warriors.`);
-      return;
-    }
-
-    // Pick random raiders
-    const raiderIds = [];
-    const shuffled = [...adultVillagers].sort(() => Math.random() - 0.5);
-    for (let i = 0; i < availableRaiders; i++) {
-      raiderIds.push(shuffled[i].id);
-    }
-
-    this.activeRaid = {
-      attackerVillageId,
-      targetVillageId,
-      raiderIds,
-      phase: 'planning',
-      planningTimer: 0,
-      travelTimer: 0,
-      retreatTimer: 0,
-      loot: null
-    };
-
-    this.addChronicleEntry(`${attacker.name} is organizing a raid against ${defender.name}!`);
+    return this.raidSystem?.startRaid(attackerVillageId, targetVillageId);
   }
 
   // Process chieftan diplomatic decisions
@@ -563,24 +438,7 @@ class Game {
 
   // Evaluate conquest - check if defender lost enough population
   evaluateConquest(defenderId, attackerId) {
-    const defender = this.getVillage(defenderId);
-    const attacker = this.getVillage(attackerId);
-    if (!defender || !attacker) return;
-
-    // Track original population for conquest calculation
-    if (defender.originalPopulation === undefined) {
-      defender.originalPopulation = this.getVillagersForVillage(defenderId).length;
-    }
-
-    const currentVillagers = this.getVillagersForVillage(defenderId).length;
-    const originalPopulation = defender.originalPopulation || currentVillagers;
-
-    // Calculate loss percentage
-    const lossRatio = 1 - (currentVillagers / Math.max(1, originalPopulation));
-
-    if (lossRatio >= CONSTANTS.WAR.CONQUEST_THRESHOLD) {
-      this.handleConquest(defenderId, attackerId);
-    }
+    this.raidSystem?.evaluateConquest(defenderId, attackerId);
   }
 
   async initialize() {
@@ -769,21 +627,33 @@ class Game {
   }
 
   getDefaultResources() {
-    return {
-      wood: 30,
-      food: 24,
-      water: 24,
-      stone: 10,
-      herbs: 5,
-      clay: 10,
-      fish: 0,
-      thatch: 12,
-      rareMaterials: 0
-    };
+    return this.economy
+      ? this.economy.getDefaultResources()
+      : {
+          wood: 0,
+          food: 0,
+          water: 0,
+          stone: 0,
+          herbs: 0,
+          clay: 0,
+          fish: 0,
+          thatch: 0,
+          rareMaterials: 0
+        };
   }
 
   normalizeResources(resources = {}) {
-    return { ...this.getDefaultResources(), ...resources };
+    return this.economy
+      ? this.economy.normalizeResources(resources)
+      : { ...this.getDefaultResources(), ...resources };
+  }
+
+  getResources(villageId = null) {
+    return this.economy.getResources(villageId);
+  }
+
+  getHudResources() {
+    return this.economy.getResourcesSnapshot(this.economy.getHudVillage()?.id);
   }
 
   createDefaultGovernment() {
@@ -879,12 +749,13 @@ class Game {
   }
 
   measureRuleCompliance(rule) {
+    const resources = this.getResources();
     switch (rule.effect) {
       case 'food_reserve':
       case 'farm_first':
-        return (this.resources.food || 0) >= this.villagers.length * 4 ? 90 : 45;
+        return (resources.food || 0) >= this.villagers.length * 4 ? 90 : 45;
       case 'water_priority':
-        return (this.resources.water || 0) >= this.villagers.length * 4 ? 90 : 45;
+        return (resources.water || 0) >= this.villagers.length * 4 ? 90 : 45;
       case 'construction_duty':
         return this.constructionProjects.length > 0 || this.timeState.day - rule.createdDay < 2 ? 85 : 55;
       case 'rest_curfew':
@@ -961,6 +832,15 @@ class Game {
 
     // Create villages
     this.createVillages(2);
+
+    // Economy / raid systems once villages exist
+    this.economy = new Economy(this);
+    this.raidSystem = new RaidSystem(this);
+    this.hudVillageId = this.villages[0]?.id || null;
+    this.nextChieftanDecision = {};
+    this.hostileDaysCount = {};
+    this.activeRaid = null;
+    this.diplomaticEvents = [];
 
     // Create initial villagers (distributed between villages)
     this.createInitialVillagers();
@@ -1201,14 +1081,23 @@ class Game {
 
   createInitialVillagers() {
     this.villagers = [];
+    const startingCount = CONSTANTS.VILLAGE.STARTING_VILLAGERS;
+    const tribespeoplePerVillage = Math.max(0, startingCount - 1);
+    const genderCycle = ['male', 'female', 'female', 'male', 'nonbinary'];
 
-    // Create 2 chieftans (one per village)
-    for (let i = 0; i < 2; i++) {
+    // Spawn balanced population per village: 1 chieftan + tribespeople near center
+    this.villages.forEach((village, villageIdx) => {
+      const center = village.center || this.world.villageCenters[villageIdx] || {
+        x: this.world.size / 2,
+        y: this.world.size / 2
+      };
+
       const chieftan = new Villager({
         name: Utils.generateName('male'),
         age: Utils.randomInt(35, 50),
         gender: 'male',
         isChieftan: true,
+        villageId: village.id,
         skills: {
           gathering: 6,
           crafting: 5,
@@ -1226,31 +1115,23 @@ class Game {
           confident: 85
         }
       });
-
-      const center = this.world.villageCenters[i] || { x: this.world.size / 2, y: this.world.size / 2 };
       chieftan.x = center.x + Utils.randomFloat(-1, 1);
       chieftan.y = center.y + Utils.randomFloat(-1, 1);
-
       this.villagers.push(chieftan);
-    }
 
-    // Create 4 additional tribespeople per village (8 total)
-    const genders = ['male', 'female', 'female', 'male', 'nonbinary', 'female', 'male', 'nonbinary'];
-    for (let i = 0; i < 8; i++) {
-      const villager = new Villager({
-        name: Utils.generateName(genders[i]),
-        age: Utils.randomInt(18, 45),
-        gender: genders[i]
-      });
-
-      // Alternate between villages
-      const villageIdx = i < 4 ? 0 : 1;
-      const center = this.world.villageCenters[villageIdx] || { x: this.world.size / 2, y: this.world.size / 2 };
-      villager.x = center.x + Utils.randomFloat(-2, 2);
-      villager.y = center.y + Utils.randomFloat(-2, 2);
-
-      this.villagers.push(villager);
-    }
+      for (let i = 0; i < tribespeoplePerVillage; i++) {
+        const gender = genderCycle[i % genderCycle.length];
+        const villager = new Villager({
+          name: Utils.generateName(gender),
+          age: Utils.randomInt(18, 45),
+          gender,
+          villageId: village.id
+        });
+        villager.x = center.x + Utils.randomFloat(-2, 2);
+        villager.y = center.y + Utils.randomFloat(-2, 2);
+        this.villagers.push(villager);
+      }
+    });
   }
 
   initializeVillageRelationships() {
@@ -1396,10 +1277,7 @@ class Game {
     this.processChieftanDecisions();
 
     // Get active village's resources for HUD (or first village)
-    const activeVillage = this.selectedVillager?.villageId
-      ? this.getVillage(this.selectedVillager.villageId)
-      : this.villages[0];
-    const displayResources = activeVillage?.resources || { wood: 0, food: 0, water: 0, stone: 0, herbs: 0, clay: 0, fish: 0, thatch: 0, rareMaterials: 0 };
+    const displayResources = this.getHudResources();
 
     // Update UI
     this.ui.updateHUD(this.timeState, displayResources, this.paused, this.villages);
@@ -1516,7 +1394,7 @@ class Game {
 
     // Add resource status occasionally
     if (this.timeState.day % 3 === 0) {
-      const foodStatus = this.resources.food < 10 ? 'is scarce' : 'is plentiful';
+      const foodStatus = (this.getResources().food || 0) < 10 ? 'is scarce' : 'is plentiful';
       this.addChronicleEntry(`The village granary ${foodStatus}. ${this.villagers.length} souls call Simville home.`);
     }
 
@@ -1791,8 +1669,9 @@ class Game {
     }
 
     const avgMood = this.villagers.reduce((sum, v) => sum + v.mood, 0) / this.villagers.length;
-    const foodReserve = this.resources.food || 0;
-    const waterReserve = this.resources.water || 0;
+    const resources = this.getResources();
+    const foodReserve = resources.food || 0;
+    const waterReserve = resources.water || 0;
     return avgMood > 0 &&
       foodReserve >= this.villagers.length * 0.8 &&
       waterReserve >= this.villagers.length * 0.8;
@@ -1857,11 +1736,6 @@ class Game {
   }
 
   produceStructureResources() {
-    const counts = this.world.structures.reduce((acc, structure) => {
-      acc[structure.type] = (acc[structure.type] || 0) + 1;
-      return acc;
-    }, {});
-
     const seasonName = this.timeState.season?.name;
     const farmMultiplier = seasonName === 'Harvest Season' ? 1.5 :
       seasonName === 'Deep Dry' ? 0.5 :
@@ -1869,87 +1743,46 @@ class Game {
     const wellMultiplier = seasonName === 'Deep Dry' ? 0.6 :
       seasonName === 'Dry Season' ? 0.8 : 1.1;
 
-    if (counts.farm) {
-      this.addResource(CONSTANTS.RESOURCE.FOOD, Math.round(counts.farm * 6 * farmMultiplier));
-      this.addResource(CONSTANTS.RESOURCE.THATCH, Math.round(counts.farm * 2 * farmMultiplier));
-    }
+    // Credit yields to the village that owns each structure
+    for (const structure of this.world?.structures || []) {
+      const owner = this.villages.find(v => (v.structureIds || []).includes(structure.id))
+        || this.villages[0];
+      const villageId = owner?.id || null;
 
-    if (counts.well) {
-      this.addResource(CONSTANTS.RESOURCE.WATER, Math.round(counts.well * 18 * wellMultiplier));
-    }
-
-    if (counts.workshop) {
-      this.addResource(CONSTANTS.RESOURCE.WOOD, counts.workshop);
-      this.addResource(CONSTANTS.RESOURCE.STONE, counts.workshop);
+      if (structure.type === 'farm') {
+        this.addResource(CONSTANTS.RESOURCE.FOOD, Math.round(6 * farmMultiplier), villageId);
+        this.addResource(CONSTANTS.RESOURCE.THATCH, Math.round(2 * farmMultiplier), villageId);
+      } else if (structure.type === 'well') {
+        this.addResource(CONSTANTS.RESOURCE.WATER, Math.round(18 * wellMultiplier), villageId);
+      } else if (structure.type === 'workshop') {
+        this.addResource(CONSTANTS.RESOURCE.WOOD, 1, villageId);
+        this.addResource(CONSTANTS.RESOURCE.STONE, 1, villageId);
+      }
     }
   }
 
-  getStorageCapacity(resourceType = null) {
-    const storageCount = this.world?.structures?.filter(s => s.type === 'storage').length || 0;
-    const baseCapacity = {
-      wood: 80,
-      food: 70,
-      water: 70,
-      stone: 70,
-      herbs: 40,
-      clay: 70,
-      fish: 40,
-      thatch: 80,
-      rareMaterials: 20
-    };
-
-    const addedCapacity = storageCount * 100;
-    if (resourceType) {
-      return (baseCapacity[resourceType] || 50) + addedCapacity;
-    }
-
-    return Object.fromEntries(Object.values(CONSTANTS.RESOURCE).map(resource => [
-      resource,
-      (baseCapacity[resource] || 50) + addedCapacity
-    ]));
+  getStorageCapacity(resourceType = null, villageId = null) {
+    return this.economy.getStorageCapacity(resourceType, villageId);
   }
 
-  addResource(resourceType, amount) {
-    if (!resourceType || !Number.isFinite(amount) || amount <= 0) return 0;
-
-    this.resources = this.normalizeResources(this.resources);
-    const capacity = this.getStorageCapacity(resourceType);
-    const before = this.resources[resourceType] || 0;
-    const after = Utils.clamp(before + amount, 0, capacity);
-    this.resources[resourceType] = after;
-    return after - before;
+  addResource(resourceType, amount, villageId = null, x = null, y = null) {
+    return this.economy.addResource(resourceType, amount, villageId, x, y);
   }
 
-  clampStoredResources() {
-    this.resources = this.normalizeResources(this.resources);
-    for (const resourceType of Object.values(CONSTANTS.RESOURCE)) {
-      this.resources[resourceType] = Utils.clamp(
-        this.resources[resourceType] || 0,
-        0,
-        this.getStorageCapacity(resourceType)
-      );
-    }
+  clampStoredResources(villageId = null) {
+    this.economy.clampStoredResources(villageId);
   }
 
   getStructureCosts(struct) {
-    return Object.values(CONSTANTS.RESOURCE)
-      .filter(resource => Number.isFinite(struct?.[resource]) && struct[resource] > 0)
-      .map(resource => [resource, struct[resource]]);
+    return this.economy.getStructureCosts(struct);
   }
 
-  canAffordStructure(struct) {
-    this.resources = this.normalizeResources(this.resources);
-    return this.getStructureCosts(struct)
-      .every(([resource, amount]) => (this.resources[resource] || 0) >= amount);
+  canAffordStructure(struct, villageId = null) {
+    return this.economy.canAffordStructure(struct, villageId);
   }
 
-  consumeStructureCost(struct) {
-    if (!this.canAffordStructure(struct)) return false;
-
-    this.getStructureCosts(struct).forEach(([resource, amount]) => {
-      this.resources[resource] -= amount;
-    });
-    return true;
+  consumeStructureCost(struct, villageId = null) {
+    return this.economy.consumeStructureCost(struct, villageId);
   }
 
   updateVillagers(deltaTime) {
@@ -2292,7 +2125,7 @@ class Game {
 
     // Build world state for LLM
     const worldState = {
-      resources: { ...this.resources },
+      resources: this.getHudResources(),
       structures: this.world.structures.map(s => ({ type: s.type, x: s.x, y: s.y })),
       population: this.villagers.length,
       day: this.timeState.day,
@@ -2331,13 +2164,14 @@ class Game {
 
           if (hasCriticalNeeds && !isSurvivalAction) {
             // Force survival behavior instead of LLM action
-            if ((villager.thirst ?? 100) < 30 && this.resources.water > 0) {
+            const villageResources = this.getResources(villager.villageId);
+            if ((villager.thirst ?? 100) < 30 && villageResources.water > 0) {
               villager.status = CONSTANTS.ACTIVITY.DRINKING;
               villager.activity = 'Desperate for water';
               villager.showSpeechBubble('💧', 'Needs water!');
               continue;
             }
-            if (villager.hunger < 30 && this.resources.food > 0) {
+            if (villager.hunger < 30 && villageResources.food > 0) {
               villager.status = CONSTANTS.ACTIVITY.EATING;
               villager.activity = 'Desperate for food';
               villager.showSpeechBubble('🍖', 'Needs food!');
@@ -2352,18 +2186,21 @@ class Game {
             continue; // Skip LLM action for critically needy villagers
           }
 
-          if ((villager.thirst ?? 100) < 35 && this.resources.water > 0) {
-            villager.status = CONSTANTS.ACTIVITY.DRINKING;
-            villager.activity = 'Drinking from village water stores';
-            villager.showSpeechBubble('💧', 'Drinking');
-            continue;
-          }
+          {
+            const villageResources = this.getResources(villager.villageId);
+            if ((villager.thirst ?? 100) < 35 && villageResources.water > 0) {
+              villager.status = CONSTANTS.ACTIVITY.DRINKING;
+              villager.activity = 'Drinking from village water stores';
+              villager.showSpeechBubble('💧', 'Drinking');
+              continue;
+            }
 
-          if (villager.hunger < 35 && this.resources.food > 0) {
-            villager.status = CONSTANTS.ACTIVITY.EATING;
-            villager.activity = 'Eating from the village stores';
-            villager.showSpeechBubble('🍖', 'Eating');
-            continue;
+            if (villager.hunger < 35 && villageResources.food > 0) {
+              villager.status = CONSTANTS.ACTIVITY.EATING;
+              villager.activity = 'Eating from the village stores';
+              villager.showSpeechBubble('🍖', 'Eating');
+              continue;
+            }
           }
 
           villager.applyAction(action);
@@ -2431,7 +2268,7 @@ class Game {
               if (dist > CONSTANTS.INTERACTION.PROXIMITY_REQUIRED) {
                 // Too far away - cancel the interaction
                 villager.showSpeechBubble('🚫', 'Too far to talk');
-                return; // Skip this action entirely
+                continue; // Skip this action entirely
               }
 
               const relChange = action.interactionType === 'argue' ? -5 : 3;
@@ -2548,19 +2385,20 @@ class Game {
     const waterRuleMultiplier = this.hasActiveRuleEffect('water_priority') ? 1.45 : 1;
     const foodReserveTarget = Math.max(25, this.villagers.length * 8 * foodRuleMultiplier);
     const waterReserveTarget = Math.max(25, this.villagers.length * 10 * waterRuleMultiplier);
-    const needsFood = this.resources.food < foodReserveTarget ||
+    const resources = this.getResources();
+    const needsFood = resources.food < foodReserveTarget ||
       this.villagers.some(v => v.hunger < 45);
-    const needsWater = this.resources.water < waterReserveTarget ||
+    const needsWater = resources.water < waterReserveTarget ||
       this.villagers.some(v => (v.thirst ?? 100) < 50);
     const needsMaterials = this.needsConstructionMaterials();
 
     if (!needsFood && !needsWater && !needsMaterials) return;
 
-    if (needsWater && this.resources.water < this.villagers.length) {
+    if (needsWater && resources.water < this.villagers.length) {
       this.addResource(CONSTANTS.RESOURCE.WATER, Math.ceil(this.villagers.length * 3));
     }
 
-    if (needsFood && this.resources.food < Math.ceil(this.villagers.length / 2)) {
+    if (needsFood && resources.food < Math.ceil(this.villagers.length / 2)) {
       this.addResource(CONSTANTS.RESOURCE.FOOD, Math.ceil(this.villagers.length * 1.5));
     }
 
@@ -2605,7 +2443,7 @@ class Game {
       herbs: 5
     };
 
-    return Object.entries(reserves).some(([resource, amount]) => (this.resources[resource] || 0) < amount);
+    return Object.entries(reserves).some(([resource, amount]) => (this.getResources()[resource] || 0) < amount);
   }
 
   assignWaterWork(villager) {
@@ -2629,14 +2467,14 @@ class Game {
 
     const well = this.world.structures.find(s => s.type === 'well');
     if (well) {
-      this.addResource(CONSTANTS.RESOURCE.WATER, Math.max(2, villager.skills.gathering || 1));
+      this.addResource(CONSTANTS.RESOURCE.WATER, Math.max(2, villager.skills.gathering || 1), villager.villageId, villager.x, villager.y);
       villager.status = CONSTANTS.ACTIVITY.GATHERING;
       villager.activity = 'Drawing water from the well';
       villager.showSpeechBubble('💧', 'Drawing water', 2500);
       return true;
     }
 
-    const collected = this.addResource(CONSTANTS.RESOURCE.WATER, 2);
+    const collected = this.addResource(CONSTANTS.RESOURCE.WATER, 2, villager.villageId, villager.x, villager.y);
     if (collected > 0) {
       villager.status = CONSTANTS.ACTIVITY.GATHERING;
       villager.activity = 'Collecting surface water';
@@ -2659,7 +2497,7 @@ class Game {
 
     const targetType = priorities.find(resource => {
       const targetReserve = resource === CONSTANTS.RESOURCE.RARE_MATERIALS ? 2 : 18;
-      return (this.resources[resource] || 0) < targetReserve &&
+      return (this.getResources(villager.villageId)[resource] || 0) < targetReserve &&
         this.findNearestResource(villager.x, villager.y, resource, 16);
     });
     if (!targetType) return;
@@ -2725,7 +2563,13 @@ class Game {
       return true;
     }
 
-    const foraged = this.addResource(CONSTANTS.RESOURCE.FOOD, Math.max(1, Math.floor((villager.skills.gathering || 1) / 2)));
+    const foraged = this.addResource(
+      CONSTANTS.RESOURCE.FOOD,
+      Math.max(1, Math.floor((villager.skills.gathering || 1) / 2)),
+      villager.villageId,
+      villager.x,
+      villager.y
+    );
     if (foraged > 0) {
       villager.status = CONSTANTS.ACTIVITY.GATHERING;
       villager.activity = 'Foraging for food';
@@ -2750,9 +2594,9 @@ class Game {
     const gathered = this.world.harvestResource(resource.id, Math.max(1, skill));
 
     if (gathered > 0) {
-      this.addResource(CONSTANTS.RESOURCE.FOOD, gathered);
+      this.addResource(CONSTANTS.RESOURCE.FOOD, gathered, villager.villageId, villager.x, villager.y);
       if (resource.type === CONSTANTS.RESOURCE.FISH) {
-        this.addResource(CONSTANTS.RESOURCE.FISH, gathered);
+        this.addResource(CONSTANTS.RESOURCE.FISH, gathered, villager.villageId, villager.x, villager.y);
       }
       villager.addInteraction('gather', resource.type, `Gathered ${gathered} ${resource.type}`);
       villager.energy = Math.max(0, villager.energy - 0.5);
@@ -2765,7 +2609,7 @@ class Game {
     const gathered = this.world.harvestResource(resource.id, Math.max(1, skillLevel));
     if (gathered <= 0) return 0;
 
-    this.addResource(resource.type, gathered);
+    this.addResource(resource.type, gathered, villager.villageId, villager.x, villager.y);
     villager.addInteraction('gather', resource.type, `Gathered ${gathered} ${resource.type}`);
     villager.energy = Math.max(0, villager.energy - 0.5);
     return gathered;
@@ -2793,9 +2637,9 @@ class Game {
         // Move to the resource to gather it
         villager.moveTo(resource.x, resource.y, this.world);
 
-        this.addResource(resourceType, gathered);
+        this.addResource(resourceType, gathered, villager.villageId, villager.x, villager.y);
         if (resourceType === CONSTANTS.RESOURCE.FISH) {
-          this.addResource(CONSTANTS.RESOURCE.FOOD, gathered);
+          this.addResource(CONSTANTS.RESOURCE.FOOD, gathered, villager.villageId, villager.x, villager.y);
         }
         villager.addInteraction('gather', resourceType, `Gathered ${gathered} ${resourceType}`);
 
@@ -2842,7 +2686,7 @@ class Game {
     const hunted = Utils.randomInt(1, skillLevel * 2);
 
     if (hunted > 0) {
-      this.addResource(CONSTANTS.RESOURCE.FOOD, hunted);
+      this.addResource(CONSTANTS.RESOURCE.FOOD, hunted, villager.villageId, villager.x, villager.y);
       villager.addInteraction('hunt', 'food', `Hunted ${hunted} food`);
     }
     return hunted;
@@ -2859,8 +2703,8 @@ class Game {
 
       if (fished > 0) {
         villager.moveTo(waterResource.x, waterResource.y, this.world);
-        this.addResource(CONSTANTS.RESOURCE.FISH, fished);
-        this.addResource(CONSTANTS.RESOURCE.FOOD, fished); // Fish counts as food
+        this.addResource(CONSTANTS.RESOURCE.FISH, fished, villager.villageId, villager.x, villager.y);
+        this.addResource(CONSTANTS.RESOURCE.FOOD, fished, villager.villageId, villager.x, villager.y); // Fish counts as food
         villager.addInteraction('fish', 'fish', `Caught ${fished} fish`);
         return fished;
       }
@@ -3086,13 +2930,14 @@ class Game {
     }
 
     try {
+      const hudResources = this.getHudResources();
       const prompt = `The chieftan ${this.villagers.find(v => v.isChieftan)?.name || 'Kana'} must give guidance to the village.
 
 Current state:
 - Population: ${this.villagers.length} villagers
-- Food: ${this.resources.food || 0}
-- Wood: ${this.resources.wood || 0}
-- Stone: ${this.resources.stone || 0}
+- Food: ${hudResources.food || 0}
+- Wood: ${hudResources.wood || 0}
+- Stone: ${hudResources.stone || 0}
 - Village mood: ${this.villagers.reduce((sum, v) => sum + v.mood, 0) / this.villagers.length}
 - Day: ${this.timeState.day}
 - Structures: ${this.world.structures.length}
@@ -3527,17 +3372,17 @@ Respond with JSON: {
       priorities.push('hut', 'farm', 'storage', 'workshop');
     }
 
-    if ((this.resources.water || 0) < this.villagers.length * 8 && hasOrPending('well') < Math.max(1, Math.ceil(this.villagers.length / 8))) {
+    if ((this.getResources().water || 0) < this.villagers.length * 8 && hasOrPending('well') < Math.max(1, Math.ceil(this.villagers.length / 8))) {
       priorities.push('well');
     }
 
-    if ((this.resources.food || 0) < this.villagers.length * 8 && hasOrPending('farm') < Math.max(1, Math.ceil(this.villagers.length / 6))) {
+    if ((this.getResources().food || 0) < this.villagers.length * 8 && hasOrPending('farm') < Math.max(1, Math.ceil(this.villagers.length / 6))) {
       priorities.push('farm');
     }
 
     const capacity = this.getStorageCapacity();
     const storagePressure = Object.values(CONSTANTS.RESOURCE).some(resource =>
-      (this.resources[resource] || 0) > (capacity[resource] || 1) * 0.82
+      (this.getResources()[resource] || 0) > (capacity[resource] || 1) * 0.82
     );
     if (storagePressure && hasOrPending('storage') < Math.max(1, Math.ceil(this.villagers.length / 10))) {
       priorities.push('storage');
@@ -3562,24 +3407,26 @@ Respond with JSON: {
       return false;
     }
 
-    if (!this.canAffordStructure(struct)) {
-      if (options.source === 'manual') this.ui.showToast(`Not enough resources for ${struct.name}.`, true);
-      return false;
-    }
-
-    const buildLoc = this.findBuildLocation(struct.id);
-    if (!buildLoc) {
-      if (options.source === 'manual') this.ui.showToast('No valid build location found!', true);
-      return false;
-    }
-
     const builder = this.selectBuilder(options.builderId);
     if (!builder) {
       if (options.source === 'manual') this.ui.showToast('No available builder.', true);
       return false;
     }
 
-    if (!this.consumeStructureCost(struct)) return false;
+    const villageId = options.villageId || builder.villageId || this.hudVillageId || null;
+
+    if (!this.canAffordStructure(struct, villageId)) {
+      if (options.source === 'manual') this.ui.showToast(`Not enough resources for ${struct.name}.`, true);
+      return false;
+    }
+
+    const buildLoc = this.findBuildLocation(struct.id, villageId);
+    if (!buildLoc) {
+      if (options.source === 'manual') this.ui.showToast('No valid build location found!', true);
+      return false;
+    }
+
+    if (!this.consumeStructureCost(struct, villageId)) return false;
 
     const project = {
       id: Utils.generateId(),
@@ -3588,6 +3435,7 @@ Respond with JSON: {
       x: buildLoc.x,
       y: buildLoc.y,
       builderId: builder.id,
+      villageId,
       progress: 0,
       workRequired: this.getStructureWorkRequired(struct),
       startedDay: this.timeState.day,
@@ -3646,12 +3494,20 @@ Respond with JSON: {
     if (index === -1) return;
 
     this.constructionProjects.splice(index, 1);
-    this.world.addStructure({
+    const structure = this.world.addStructure({
       type: project.type,
       x: project.x,
       y: project.y,
       builtBy: project.builderId
     });
+
+    const ownerId = project.villageId
+      || this.villagers.find(v => v.id === project.builderId)?.villageId
+      || this.villages[0]?.id;
+    const owner = this.getVillage(ownerId);
+    if (owner && structure?.id) {
+      owner.structureIds.push(structure.id);
+    }
 
     const builder = this.villagers.find(v => v.id === project.builderId);
     if (builder) {
@@ -3728,7 +3584,7 @@ Respond with JSON: {
     if (this.paused || !llm.config?.llm?.apiKey) return;
 
     const worldState = {
-      resources: { ...this.resources },
+      resources: this.getHudResources(),
       structures: this.world.structures.map(s => ({ type: s.type, x: s.x, y: s.y })),
       population: this.villagers.length,
       day: this.timeState.day,
@@ -4007,6 +3863,9 @@ Respond with JSON: {
       techState: this.techState,
       activeRaid: this.activeRaid,
       diplomaticEvents: this.diplomaticEvents,
+      nextChieftanDecision: this.nextChieftanDecision,
+      hostileDaysCount: this.hostileDaysCount,
+      hudVillageId: this.hudVillageId,
       savedAt: Date.now()
     };
 
@@ -4054,14 +3913,22 @@ Respond with JSON: {
           id: Utils.generateId(),
           name: 'Simville',
           center: this.world.villageCenters[0] || { x: this.world.size / 2, y: this.world.size / 2 },
-          villagerIds: this.villagers.filter(v => !v.villageId || v.villageId === 'village1').map(v => v.id),
-          resources: saveData.resources || this.getDefaultResources()
+          villagerIds: this.villagers.filter(v => !v.villageId || v.villageId === 'village1').map(v => v.id)
         });
         this.villages.push(v1);
         // Assign villageId to villagers
         this.villagers.forEach(v => {
           if (!v.villageId) v.villageId = v1.id;
         });
+      }
+
+      // Instantiate systems after villages restored
+      this.economy = new Economy(this);
+      this.raidSystem = new RaidSystem(this);
+
+      // Migrate legacy Game.resources orphan pool if present
+      if (saveData.resources) {
+        this.economy.migrateOrphanResources(saveData.resources);
       }
 
       // Restore time
@@ -4087,6 +3954,9 @@ Respond with JSON: {
       // Restore inter-village state
       this.activeRaid = saveData.activeRaid || null;
       this.diplomaticEvents = saveData.diplomaticEvents || [];
+      this.nextChieftanDecision = saveData.nextChieftanDecision || {};
+      this.hostileDaysCount = saveData.hostileDaysCount || {};
+      this.hudVillageId = saveData.hudVillageId || this.villages[0]?.id || null;
 
       // Center camera on first village
       this.worldRenderer.centerOn(this.world.villageCenters[0]?.x || this.world.size / 2, this.world.villageCenters[0]?.y || this.world.size / 2);
