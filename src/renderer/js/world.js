@@ -6,6 +6,9 @@ class World {
     this.tiles = [];
     this.resources = [];
     this.structures = [];
+    this.resourceGrid = null;
+    this.structureGrid = null;
+    this.minimapDirty = true;
     this.seed = Date.now();
     this.villageCenters = [];  // Array of { x, y } for multiple villages
   }
@@ -15,7 +18,20 @@ class World {
     this.generateTerrain();
     this.generateResources();
     this.placeVillageCenters(2);  // Place 2 villages
+    this.rebuildOccupancy();
+    this.minimapDirty = true;
     return this;
+  }
+
+  rebuildOccupancy() {
+    this.resourceGrid = new Map();
+    this.structureGrid = new Map();
+    for (const r of this.resources) this.resourceGrid.set(`${r.x},${r.y}`, r);
+    for (const s of this.structures) this.structureGrid.set(`${s.x},${s.y}`, s);
+  }
+
+  markMinimapDirty() {
+    this.minimapDirty = true;
   }
 
   generateTerrain() {
@@ -241,10 +257,11 @@ class World {
 
         const component = [];
         const queue = [{ x, y }];
+        let head = 0;
         visited.add(key);
 
-        while (queue.length > 0) {
-          const current = queue.shift();
+        while (head < queue.length) {
+          const current = queue[head++];
           component.push(current);
           for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
             const nx = current.x + dx;
@@ -644,7 +661,30 @@ class World {
   }
 
   getResourceAt(x, y) {
-    return this.resources.find(r => r.x === x && r.y === y && !r.depleted);
+    if (!this.resourceGrid) this.rebuildOccupancy();
+    const resource = this.resourceGrid.get(`${x},${y}`);
+    return resource && !resource.depleted ? resource : undefined;
+  }
+
+  addResource(resource) {
+    const created = {
+      id: Utils.generateId(),
+      ...resource
+    };
+    this.resources.push(created);
+    if (!this.resourceGrid) this.rebuildOccupancy();
+    else this.resourceGrid.set(`${created.x},${created.y}`, created);
+    this.minimapDirty = true;
+    return created;
+  }
+
+  removeResource(resourceId) {
+    const idx = this.resources.findIndex(r => r.id === resourceId);
+    if (idx === -1) return false;
+    const [removed] = this.resources.splice(idx, 1);
+    if (this.resourceGrid) this.resourceGrid.delete(`${removed.x},${removed.y}`);
+    this.minimapDirty = true;
+    return true;
   }
 
   harvestResource(resourceId, amount = 1) {
@@ -667,15 +707,30 @@ class World {
   }
 
   addStructure(structure) {
-    this.structures.push({
+    const created = {
       id: Utils.generateId(),
       ...structure,
       builtAt: game ? game.timeState.day : 1
-    });
+    };
+    this.structures.push(created);
+    if (!this.structureGrid) this.rebuildOccupancy();
+    else this.structureGrid.set(`${created.x},${created.y}`, created);
+    this.minimapDirty = true;
+    return created;
+  }
+
+  removeStructure(structureId) {
+    const idx = this.structures.findIndex(s => s.id === structureId);
+    if (idx === -1) return false;
+    const [removed] = this.structures.splice(idx, 1);
+    if (this.structureGrid) this.structureGrid.delete(`${removed.x},${removed.y}`);
+    this.minimapDirty = true;
+    return true;
   }
 
   getStructureAt(x, y) {
-    return this.structures.find(s => s.x === x && s.y === y);
+    if (!this.structureGrid) this.rebuildOccupancy();
+    return this.structureGrid.get(`${x},${y}`);
   }
 
   getStructuresInRadius(x, y, radius) {
@@ -690,12 +745,13 @@ class World {
     if (start.x === end.x && start.y === end.y) return [];
 
     const queue = [{ x: start.x, y: start.y }];
+    let head = 0;
     const visited = new Set([`${start.x},${start.y}`]);
     const cameFrom = new Map();
     let found = false;
 
-    while (queue.length > 0) {
-      const current = queue.shift();
+    while (head < queue.length) {
+      const current = queue[head++];
       if (current.x === end.x && current.y === end.y) {
         found = true;
         break;
@@ -753,6 +809,8 @@ class World {
     world.seed = data.seed;
     // Handle both old (single center) and new (array) formats
     world.villageCenters = data.villageCenters || (data.villageCenter ? [data.villageCenter] : []);
+    world.rebuildOccupancy();
+    world.minimapDirty = true;
     return world;
   }
 }
@@ -782,6 +840,11 @@ class WorldRenderer {
       evening: 'rgba(255, 100, 50, 0.25)',
       night: 'rgba(20, 20, 60, 0.5)'
     };
+
+    // Cached minimap terrain (tiles, territories, structures, centers)
+    this.minimapCache = null;
+    this.minimapCacheSize = { width: 0, height: 0 };
+    this.minimapCacheShowLabels = null;
   }
 
   resize() {
@@ -825,7 +888,7 @@ class WorldRenderer {
     return { x, y };
   }
 
-  render(timeOfDay, season, showLabels = true) {
+  render(timeOfDay, season, showLabels = true, weather = null) {
     const ctx = this.ctx;
     const scale = this.camera.zoom * CONSTANTS.WORLD.PIXEL_SCALE;
 
@@ -898,6 +961,23 @@ class WorldRenderer {
     if (season) {
       ctx.fillStyle = `${season.color}15`;
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+
+    // Rain weather tint when particles enabled for wet season
+    if (weather?.rain) {
+      ctx.fillStyle = 'rgba(74, 144, 217, 0.12)';
+      ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+      ctx.strokeStyle = 'rgba(180, 210, 240, 0.35)';
+      ctx.lineWidth = 1;
+      const streakCount = 40;
+      for (let i = 0; i < streakCount; i++) {
+        const x = ((i * 97) + (Date.now() / 30) % this.canvas.width) % this.canvas.width;
+        const y = ((i * 53) + (Date.now() / 20)) % this.canvas.height;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - 2, y + 10);
+        ctx.stroke();
+      }
     }
 
     // Night darkness (apply to areas without fire light)
@@ -1094,54 +1174,81 @@ class WorldRenderer {
   renderMinimap(minimapCanvas, villagers, showLabels = true, constructionProjects = [], villages = []) {
     const ctx = minimapCanvas.getContext('2d');
     const scale = minimapCanvas.width / this.world.size;
+    const sizeChanged =
+      !this.minimapCache ||
+      this.minimapCacheSize.width !== minimapCanvas.width ||
+      this.minimapCacheSize.height !== minimapCanvas.height;
+    const labelsChanged = this.minimapCacheShowLabels !== showLabels;
 
-    // Clear
-    ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
-
-    // Draw tiles
-    for (let y = 0; y < this.world.size; y++) {
-      for (let x = 0; x < this.world.size; x++) {
-        const tile = this.world.tiles[y]?.[x];
-        if (!tile) continue;
-
-        ctx.fillStyle = this.biomeColors[tile.biome] || '#333';
-        ctx.fillRect(x * scale, y * scale, scale + 0.5, scale + 0.5);
+    if (this.world.minimapDirty || sizeChanged || labelsChanged || !this.minimapCache) {
+      if (sizeChanged) {
+        this.minimapCache = document.createElement('canvas');
+        this.minimapCache.width = minimapCanvas.width;
+        this.minimapCache.height = minimapCanvas.height;
+        this.minimapCacheSize = { width: minimapCanvas.width, height: minimapCanvas.height };
       }
-    }
 
-    // Draw village territories (subtle colored regions)
-    const villageColors = ['rgba(78, 204, 163, 0.15)', 'rgba(233, 69, 96, 0.15)'];
-    villages.forEach((village, idx) => {
-      if (idx < 2) {
-        const color = villageColors[idx] || 'rgba(128, 128, 128, 0.15)';
-        const radius = village.territoryRadius * scale;
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(village.center.x * scale, village.center.y * scale, radius, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    });
+      const cacheCtx = this.minimapCache.getContext('2d');
+      cacheCtx.fillStyle = '#1a1a2e';
+      cacheCtx.fillRect(0, 0, this.minimapCache.width, this.minimapCache.height);
 
-    // Draw structures (colored by village)
-    this.world.structures.forEach(s => {
-      let color = '#fff';
-      for (let i = 0; i < villages.length; i++) {
-        if (villages[i].structureIds.includes(s.id)) {
-          color = i === 0 ? '#4ecca3' : '#e94560';
-          break;
+      for (let y = 0; y < this.world.size; y++) {
+        for (let x = 0; x < this.world.size; x++) {
+          const tile = this.world.tiles[y]?.[x];
+          if (!tile) continue;
+          cacheCtx.fillStyle = this.biomeColors[tile.biome] || '#333';
+          cacheCtx.fillRect(x * scale, y * scale, scale + 0.5, scale + 0.5);
         }
       }
-      ctx.fillStyle = color;
-      ctx.fillRect(s.x * scale - 1, s.y * scale - 1, 3, 3);
-    });
 
+      const villageColors = ['rgba(78, 204, 163, 0.15)', 'rgba(233, 69, 96, 0.15)'];
+      villages.forEach((village, idx) => {
+        if (idx < 2) {
+          const color = villageColors[idx] || 'rgba(128, 128, 128, 0.15)';
+          const radius = village.territoryRadius * scale;
+          cacheCtx.fillStyle = color;
+          cacheCtx.beginPath();
+          cacheCtx.arc(village.center.x * scale, village.center.y * scale, radius, 0, Math.PI * 2);
+          cacheCtx.fill();
+        }
+      });
+
+      this.world.structures.forEach(s => {
+        let color = '#fff';
+        for (let i = 0; i < villages.length; i++) {
+          if (villages[i].structureIds.includes(s.id)) {
+            color = i === 0 ? '#4ecca3' : '#e94560';
+            break;
+          }
+        }
+        cacheCtx.fillStyle = color;
+        cacheCtx.fillRect(s.x * scale - 1, s.y * scale - 1, 3, 3);
+      });
+
+      const centerColors = ['#4ecca3', '#e94560'];
+      this.world.villageCenters.forEach((center, idx) => {
+        cacheCtx.strokeStyle = centerColors[idx] || '#fff';
+        cacheCtx.lineWidth = 1.5;
+        cacheCtx.strokeRect(center.x * scale - 4, center.y * scale - 4, 8, 8);
+        if (showLabels) {
+          cacheCtx.fillStyle = centerColors[idx] || '#fff';
+          cacheCtx.font = `${Math.max(8, minimapCanvas.width / 50)}px Arial`;
+          cacheCtx.fillText(`${idx + 1}`, center.x * scale - 2, center.y * scale + 1);
+        }
+      });
+
+      this.world.minimapDirty = false;
+      this.minimapCacheShowLabels = showLabels;
+    }
+
+    ctx.drawImage(this.minimapCache, 0, 0);
+
+    // Entity overlay (moves every frame) — construction + villagers
     constructionProjects.forEach(project => {
       ctx.fillStyle = '#ffc107';
       ctx.fillRect(project.x * scale - 1, project.y * scale - 1, 3, 3);
     });
 
-    // Draw villagers (colored by village)
     villagers.forEach(v => {
       const isChieftan = v.isChieftan;
       let baseColor = isChieftan ? '#ffd700' : '#e94560';
@@ -1154,25 +1261,6 @@ class WorldRenderer {
       ctx.beginPath();
       ctx.arc(v.x * scale, v.y * scale, isChieftan ? 3 : 2, 0, Math.PI * 2);
       ctx.fill();
-    });
-
-    // Draw all village center markers
-    const centerColors = ['#4ecca3', '#e94560'];
-    this.world.villageCenters.forEach((center, idx) => {
-      ctx.strokeStyle = centerColors[idx] || '#fff';
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(
-        center.x * scale - 4,
-        center.y * scale - 4,
-        8, 8
-      );
-
-      // Village number label
-      if (showLabels) {
-        ctx.fillStyle = centerColors[idx] || '#fff';
-        ctx.font = `${Math.max(8, minimapCanvas.width / 50)}px Arial`;
-        ctx.fillText(`${idx + 1}`, center.x * scale - 2, center.y * scale + 1);
-      }
     });
   }
 }

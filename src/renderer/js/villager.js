@@ -33,8 +33,8 @@ class Villager {
     this.activity = data.activity || 'Idle';
     this.activityDuration = data.activityDuration || 0;
 
-    // Relationships
-    this.relationships = data.relationships || {}; // { villagerName: score }
+    // Relationships (keyed by villager id; name keys migrated on access)
+    this.relationships = data.relationships || {}; // { villagerId: score }
     this.partnerId = data.partnerId || null;
     this.partnerName = data.partnerName || null;
     this.parentIds = data.parentIds || [];
@@ -46,8 +46,10 @@ class Villager {
     this.lastPartnershipDay = data.lastPartnershipDay || 0;
     this.affairPartnerId = data.affairPartnerId || null;
 
-    // Life stage
+    // Life stage / aging
     this.lifeStage = Utils.getLifeStage(this.age);
+    this.ageProgress = data.ageProgress || 0;
+    this.needInterruptCooldown = data.needInterruptCooldown || 0;
 
     // Roles
     this.isChieftan = data.isChieftan || false;
@@ -105,8 +107,20 @@ class Villager {
   }
 
   update(deltaTime, world, villagers) {
-    // Update age (1 year per 90 days)
-    // Not doing continuous aging, just stage transitions
+    // Age ~1 year per 90 game days
+    if (game?.timeState) {
+      const yearsPerMs = (1 / 90) / (game.timeState.dayDuration || 600000);
+      this.ageProgress = (this.ageProgress || 0) + deltaTime * yearsPerMs;
+      if (this.ageProgress >= 1) {
+        const years = Math.floor(this.ageProgress);
+        this.age += years;
+        this.ageProgress -= years;
+      }
+    }
+
+    if (this.needInterruptCooldown > 0) {
+      this.needInterruptCooldown = Math.max(0, this.needInterruptCooldown - deltaTime);
+    }
 
     // Update needs
     this.updateNeeds(deltaTime);
@@ -150,11 +164,17 @@ class Villager {
   updateNeeds(deltaTime) {
     // Decay rates per game hour
     const hourFraction = deltaTime / (game?.timeState?.hourDuration || 600); // Assuming 10 min per hour
+    const isEatingOrDrinking =
+      this.status === CONSTANTS.ACTIVITY.EATING ||
+      this.status === CONSTANTS.ACTIVITY.DRINKING;
 
     if (this.status !== CONSTANTS.ACTIVITY.SLEEPING && this.status !== CONSTANTS.ACTIVITY.RESTING) {
       this.energy = Math.max(0, this.energy - CONSTANTS.NEED.REST_DECAY * hourFraction);
-      this.hunger = Math.max(0, this.hunger - CONSTANTS.NEED.HUNGER_DECAY * hourFraction);
-      this.thirst = Math.max(0, this.thirst - CONSTANTS.NEED.THIRST_DECAY * hourFraction);
+      // Exempt eating/drinking from hunger/thirst decay (avoid double-hit while recovering)
+      if (!isEatingOrDrinking) {
+        this.hunger = Math.max(0, this.hunger - CONSTANTS.NEED.HUNGER_DECAY * hourFraction);
+        this.thirst = Math.max(0, this.thirst - CONSTANTS.NEED.THIRST_DECAY * hourFraction);
+      }
       this.socialNeed = Math.max(0, this.socialNeed - CONSTANTS.NEED.SOCIAL_DECAY * hourFraction);
     } else {
       // Recover energy while resting
@@ -164,22 +184,28 @@ class Villager {
 
     // Recover hunger when eating. Food is consumed in small portions so eating
     // cannot heal hunger for free.
-    if (this.status === CONSTANTS.ACTIVITY.EATING && game?.resources?.food > 0) {
-      const hungerBefore = this.hunger;
-      const hungerGain = Math.min(100 - this.hunger, 35 * hourFraction);
-      const foodNeeded = hungerGain / 25;
-      const foodUsed = Math.min(game.resources.food, foodNeeded);
-      game.resources.food = Math.max(0, game.resources.food - foodUsed);
-      this.hunger = Math.min(100, hungerBefore + foodUsed * 25);
+    if (this.status === CONSTANTS.ACTIVITY.EATING && game?.getResources) {
+      const resources = game.getResources(this.villageId);
+      if ((resources.food || 0) > 0) {
+        const hungerBefore = this.hunger;
+        const hungerGain = Math.min(100 - this.hunger, 35 * hourFraction);
+        const foodNeeded = hungerGain / 25;
+        const foodUsed = Math.min(resources.food, foodNeeded);
+        resources.food = Math.max(0, resources.food - foodUsed);
+        this.hunger = Math.min(100, hungerBefore + foodUsed * 25);
+      }
     }
 
-    if (this.status === CONSTANTS.ACTIVITY.DRINKING && game?.resources?.water > 0) {
-      const thirstBefore = this.thirst;
-      const thirstGain = Math.min(100 - this.thirst, 45 * hourFraction);
-      const waterNeeded = thirstGain / 35;
-      const waterUsed = Math.min(game.resources.water, waterNeeded);
-      game.resources.water = Math.max(0, game.resources.water - waterUsed);
-      this.thirst = Math.min(100, thirstBefore + waterUsed * 35);
+    if (this.status === CONSTANTS.ACTIVITY.DRINKING && game?.getResources) {
+      const resources = game.getResources(this.villageId);
+      if ((resources.water || 0) > 0) {
+        const thirstBefore = this.thirst;
+        const thirstGain = Math.min(100 - this.thirst, 45 * hourFraction);
+        const waterNeeded = thirstGain / 35;
+        const waterUsed = Math.min(resources.water, waterNeeded);
+        resources.water = Math.max(0, resources.water - waterUsed);
+        this.thirst = Math.min(100, thirstBefore + waterUsed * 35);
+      }
     }
 
     // Health effects
@@ -203,12 +229,15 @@ class Villager {
       this.health = Math.min(100, this.health + 1 * hourFraction);
     }
 
-    if (this.health < 60 && this.hunger > 20 && this.thirst > 20 && game?.resources?.herbs > 0) {
-      const healthGain = Math.min(100 - this.health, 8 * hourFraction);
-      const herbsNeeded = healthGain / 20;
-      const herbsUsed = Math.min(game.resources.herbs, herbsNeeded);
-      game.resources.herbs = Math.max(0, game.resources.herbs - herbsUsed);
-      this.health = Math.min(100, this.health + herbsUsed * 20);
+    if (this.health < 60 && this.hunger > 20 && this.thirst > 20 && game?.getResources) {
+      const resources = game.getResources(this.villageId);
+      if ((resources.herbs || 0) > 0) {
+        const healthGain = Math.min(100 - this.health, 8 * hourFraction);
+        const herbsNeeded = healthGain / 20;
+        const herbsUsed = Math.min(resources.herbs, herbsNeeded);
+        resources.herbs = Math.max(0, resources.herbs - herbsUsed);
+        this.health = Math.min(100, this.health + herbsUsed * 20);
+      }
     }
   }
 
@@ -229,31 +258,62 @@ class Villager {
       this.activity = 'Idle';
     }
 
-    if (this.thirst < 70 && game?.resources?.water > 0) {
+    const criticalHunger = this.hunger < 25;
+    const criticalThirst = this.thirst < 25;
+    const busyWorkStatuses = [
+      CONSTANTS.ACTIVITY.WORKING,
+      CONSTANTS.ACTIVITY.GATHERING,
+      CONSTANTS.ACTIVITY.BUILDING,
+      CONSTANTS.ACTIVITY.FARMING,
+      CONSTANTS.ACTIVITY.HUNTING,
+      CONSTANTS.ACTIVITY.FISHING,
+      CONSTANTS.ACTIVITY.SOCIALIZING,
+      CONSTANTS.ACTIVITY.RITUAL
+    ];
+    const midDurationWork = this.activityDuration > 0 && busyWorkStatuses.includes(this.status);
+
+    // Don't clobber mid-duration LLM/work unless critically hungry/thirsty
+    if (midDurationWork && !criticalHunger && !criticalThirst) {
+      return;
+    }
+
+    // Cooldown after interrupting LLM work for needs
+    if (this.needInterruptCooldown > 0 && !criticalHunger && !criticalThirst) {
+      return;
+    }
+
+    const resources = game?.getResources?.(this.villageId) || game?.resources || {};
+
+    if (this.thirst < 70 && (resources.water || 0) > 0) {
+      if (midDurationWork) this.needInterruptCooldown = 30000;
       this.status = CONSTANTS.ACTIVITY.DRINKING;
       this.activity = 'Drinking from village water stores';
       return;
     }
 
-    if (this.hunger < 65 && game?.resources?.food > 0) {
+    if (this.hunger < 65 && (resources.food || 0) > 0) {
+      if (midDurationWork) this.needInterruptCooldown = 30000;
       this.status = CONSTANTS.ACTIVITY.EATING;
       this.activity = 'Eating from the village stores';
       return;
     }
 
     if (this.energy < 20) {
+      if (midDurationWork) this.needInterruptCooldown = 30000;
       this.status = CONSTANTS.ACTIVITY.RESTING;
       this.activity = 'Exhausted, needs rest';
       return;
     }
 
     if (this.thirst < 20) {
+      if (midDurationWork) this.needInterruptCooldown = 30000;
       this.status = CONSTANTS.ACTIVITY.GATHERING;
       this.activity = 'Very thirsty, seeking water';
       return;
     }
 
     if (this.hunger < 20) {
+      if (midDurationWork) this.needInterruptCooldown = 30000;
       this.status = CONSTANTS.ACTIVITY.GATHERING;
       this.activity = 'Very hungry, seeking food';
       return;
@@ -451,9 +511,62 @@ class Villager {
     }
   }
 
-  modifyRelationship(villagerName, delta) {
-    const current = this.relationships[villagerName] || 0;
-    this.relationships[villagerName] = Utils.clamp(current + delta, CONSTANTS.RELATIONSHIP.MIN, CONSTANTS.RELATIONSHIP.MAX);
+  resolveRelationshipKey(targetNameOrId) {
+    if (targetNameOrId == null) return null;
+    if (this.relationships[targetNameOrId] !== undefined) return targetNameOrId;
+
+    const other = typeof targetNameOrId === 'object'
+      ? targetNameOrId
+      : game?.villagers?.find(v => v.id === targetNameOrId || v.name === targetNameOrId);
+
+    if (other) {
+      if (this.relationships[other.id] !== undefined) return other.id;
+      if (this.relationships[other.name] !== undefined) return other.name;
+      return other.id;
+    }
+    return targetNameOrId;
+  }
+
+  getRelationship(other) {
+    if (!other) return 0;
+    const key = this.resolveRelationshipKey(
+      typeof other === 'object' ? other.id || other.name : other
+    );
+    if (key != null && this.relationships[key] !== undefined) {
+      return this.relationships[key];
+    }
+    if (typeof other === 'object') {
+      if (this.relationships[other.id] !== undefined) return this.relationships[other.id];
+      if (this.relationships[other.name] !== undefined) return this.relationships[other.name];
+    }
+    return 0;
+  }
+
+  getRelationshipDisplayName(key) {
+    const byId = game?.villagers?.find(v => v.id === key);
+    if (byId) return byId.name;
+    return key;
+  }
+
+  modifyRelationship(targetNameOrId, delta) {
+    const other = typeof targetNameOrId === 'object'
+      ? targetNameOrId
+      : game?.villagers?.find(v => v.id === targetNameOrId || v.name === targetNameOrId);
+
+    let key = targetNameOrId;
+    if (other) {
+      key = other.id;
+      // Migrate legacy name-keyed score to id
+      if (this.relationships[other.name] !== undefined && this.relationships[other.id] === undefined) {
+        this.relationships[other.id] = this.relationships[other.name];
+        delete this.relationships[other.name];
+      }
+    } else {
+      key = this.resolveRelationshipKey(targetNameOrId);
+    }
+
+    const current = this.relationships[key] || 0;
+    this.relationships[key] = Utils.clamp(current + delta, CONSTANTS.RELATIONSHIP.MIN, CONSTANTS.RELATIONSHIP.MAX);
   }
 
   getRelationshipType(otherScore) {
@@ -564,6 +677,8 @@ class Villager {
       status: this.status,
       activity: this.activity,
       activityDuration: this.activityDuration,
+      ageProgress: this.ageProgress,
+      needInterruptCooldown: this.needInterruptCooldown,
       relationships: this.relationships,
       partnerId: this.partnerId,
       partnerName: this.partnerName,

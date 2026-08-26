@@ -13,26 +13,31 @@ const Utils = {
     this.seed = seed;
   },
 
-  // Random integer between min and max (inclusive)
+  // Unseeded RNG for optional non-deterministic uses (combat/UI)
+  randomUnseeded() {
+    return Math.random();
+  },
+
+  // Random integer between min and max (inclusive) — seeded for deterministic worldgen
   randomInt(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
+    return Math.floor(this.seededRandom() * (max - min + 1)) + min;
   },
 
-  // Random float between min and max
+  // Random float between min and max — seeded
   randomFloat(min, max) {
-    return Math.random() * (max - min) + min;
+    return this.seededRandom() * (max - min) + min;
   },
 
-  // Random element from array
+  // Random element from array — seeded
   randomElement(arr) {
-    return arr[Math.floor(Math.random() * arr.length)];
+    return arr[Math.floor(this.seededRandom() * arr.length)];
   },
 
-  // Shuffle array (Fisher-Yates)
+  // Shuffle array (Fisher-Yates) — seeded
   shuffle(arr) {
     const result = [...arr];
     for (let i = result.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(this.seededRandom() * (i + 1));
       [result[i], result[j]] = [result[j], result[i]];
     }
     return result;
@@ -111,9 +116,11 @@ const Utils = {
     return CONSTANTS.LIFE_STAGE.ELDER;
   },
 
-  // Generate unique ID
+  // Generate unique ID (deterministic given seed + counter)
+  _idCounter: 0,
   generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+    this._idCounter += 1;
+    return `id_${this.seed.toString(36)}_${this._idCounter.toString(36)}`;
   },
 
   // Deep clone object
@@ -146,15 +153,26 @@ const Utils = {
     };
   },
 
+  // Escape user/LLM text before interpolating into innerHTML
+  escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  },
+
   // Capitalize first letter
   capitalize(str) {
     return str.charAt(0).toUpperCase() + str.slice(1);
   },
 
-  // Truncate string
+  // Truncate string (coerce null/undefined)
   truncate(str, maxLength) {
-    if (str.length <= maxLength) return str;
-    return str.slice(0, maxLength - 3) + '...';
+    const text = str === null || str === undefined ? '' : String(str);
+    if (text.length <= maxLength) return text;
+    return text.slice(0, maxLength - 3) + '...';
   },
 
   // Color interpolation

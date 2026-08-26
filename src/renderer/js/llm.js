@@ -4,6 +4,7 @@ class LLMManager {
   constructor() {
     this.config = null;
     this.connected = false;
+    this.offline = false;
     this.messageHistory = [];
     this.maxHistory = 10;
   }
@@ -39,7 +40,7 @@ class LLMManager {
       endpoint: testConfig?.endpoint,
       model: testConfig?.model,
       hasApiKey: !!testConfig?.apiKey,
-      apiKeyPrefix: testConfig?.apiKey?.substring(0, 10) || 'none'
+      apiKeySuffix: testConfig?.apiKey ? `...${String(testConfig.apiKey).slice(-4)}` : 'none'
     });
 
     if (!testConfig?.endpoint) {
@@ -100,8 +101,10 @@ class LLMManager {
   }
 
   async generate(prompt, systemPrompt = null) {
-    if (!this.config?.llm?.apiKey) {
-      console.log('LLM generate: No API key configured, using fallback');
+    // Allow keyless local endpoints; require at least an endpoint
+    if (!this.config?.llm?.endpoint) {
+      console.log('LLM generate: No endpoint configured, using fallback');
+      this.offline = true;
       return this.getFallbackResponse(prompt);
     }
 
@@ -149,6 +152,7 @@ class LLMManager {
 
       if (!response.ok) {
         console.error('LLM API error:', response.status, await response.text());
+        this.offline = true;
         return this.getFallbackResponse(prompt);
       }
 
@@ -158,11 +162,14 @@ class LLMManager {
       console.log('LLM generate: Got response, length:', content?.length);
 
       if (content) {
-        this.addToHistory({ role: 'user', content: prompt });
-        this.addToHistory({ role: 'assistant', content: content });
+        this.addToHistory({ role: 'user', content: prompt.slice(0, 400) });
+        this.addToHistory({ role: 'assistant', content: content.slice(0, 400) });
         const parsed = this.parseResponse(content);
         console.log('LLM generate: Parsed result:', parsed ? 'success' : 'null');
-        return parsed;
+        if (parsed) {
+          this.offline = false;
+          return parsed;
+        }
       }
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
@@ -170,6 +177,7 @@ class LLMManager {
     }
 
     console.log('LLM generate: Falling back');
+    this.offline = true;
     return this.getFallbackResponse(prompt);
   }
 
@@ -181,54 +189,108 @@ class LLMManager {
   }
 
   parseResponse(content) {
-    try {
-      // Try to extract and parse JSON from the response
-      // Strategy: find the first { and try parsing from there, handling nested braces
-      const firstBrace = content.indexOf('{');
-      if (firstBrace === -1) {
-        console.error('No JSON object found in response');
+    if (!content || typeof content !== 'string') return null;
+
+    const tryParse = (text) => {
+      try {
+        return JSON.parse(text);
+      } catch (e) {
         return null;
       }
+    };
 
-      const jsonStart = content.substring(firstBrace);
-      let endBrace = -1;
-      let braceCount = 0;
+    const wrapParsed = (parsed) => {
+      if (parsed == null) return null;
+      if (Array.isArray(parsed)) return { actions: parsed };
+      if (typeof parsed === 'object') return parsed;
+      return null;
+    };
 
-      // Find the matching closing brace by counting nested braces
-      for (let i = 0; i < jsonStart.length; i++) {
-        if (jsonStart[i] === '{') braceCount++;
-        else if (jsonStart[i] === '}') {
-          braceCount--;
-          if (braceCount === 0) {
-            endBrace = i + 1;
-            break;
+    // 1) Whole content as JSON
+    let parsed = wrapParsed(tryParse(content.trim()));
+    if (parsed) return parsed;
+
+    // 2) Markdown fenced JSON (object or array)
+    const fenceMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenceMatch) {
+      parsed = wrapParsed(tryParse(fenceMatch[1].trim()));
+      if (parsed) return parsed;
+    }
+
+    // 3) Extract first JSON object or array by brace/bracket matching
+    const extractBalanced = (src, openChar, closeChar) => {
+      const start = src.indexOf(openChar);
+      if (start === -1) return null;
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      for (let i = start; i < src.length; i++) {
+        const ch = src[i];
+        if (inString) {
+          if (escape) {
+            escape = false;
+          } else if (ch === '\\') {
+            escape = true;
+          } else if (ch === '"') {
+            inString = false;
           }
+          continue;
+        }
+        if (ch === '"') {
+          inString = true;
+          continue;
+        }
+        if (ch === openChar) depth++;
+        else if (ch === closeChar) {
+          depth--;
+          if (depth === 0) return src.substring(start, i + 1);
         }
       }
-
-      if (endBrace === -1) {
-        console.error('Could not find matching closing brace');
-        return null;
-      }
-
-      const jsonStr = jsonStart.substring(0, endBrace);
-      return JSON.parse(jsonStr);
-    } catch (error) {
-      console.error('Failed to parse LLM response:', error);
-      console.error('Content was:', content?.substring(0, 200));
       return null;
+    };
+
+    // Prefer whichever structure appears first in the text
+    const firstObj = content.indexOf('{');
+    const firstArr = content.indexOf('[');
+    const tryOrder = [];
+    if (firstArr !== -1 && (firstObj === -1 || firstArr < firstObj)) {
+      tryOrder.push(['[', ']'], ['{', '}']);
+    } else {
+      tryOrder.push(['{', '}'], ['[', ']']);
     }
+
+    for (const [open, close] of tryOrder) {
+      const extracted = extractBalanced(content, open, close);
+      if (!extracted) continue;
+      parsed = wrapParsed(tryParse(extracted));
+      if (parsed) return parsed;
+    }
+
+    console.error('Failed to parse LLM response');
+    console.error('Content was:', content?.substring(0, 200));
+    return null;
   }
 
   getFallbackResponse(prompt) {
-    // Return a reasonable default action when LLM is unavailable
+    // Generic fallback when no villager context is available
     console.warn('Using fallback LLM response');
     return {
       actions: [
-        { type: 'idle', duration: 5 }
+        { villagerId: null, action: 'idle', activity: 'Waiting for guidance', duration: 5 }
       ],
       dialogue: 'The villagers continue their daily routine.',
       event: null
+    };
+  }
+
+  getFallbackVillagerActions(villagers = []) {
+    return {
+      actions: villagers.map(v => ({
+        villagerId: v.id || v.name,
+        action: 'idle',
+        activity: 'Waiting for guidance',
+        duration: 5
+      }))
     };
   }
 
@@ -341,9 +403,11 @@ Event: ${event.description}
 Village mood: ${villageState.averageMood > 50 ? 'generally positive' : villageState.averageMood > 0 ? 'mixed' : 'troubled'}
 Day: ${event.day}
 
-The style should be evocative and memorable, as if passed down through generations.`;
+The style should be evocative and memorable, as if passed down through generations.
 
-    const systemPrompt = 'You are chronicler for a tribal village, writing in an ancient oral tradition style. Keep entries brief but vivid.';
+Respond with valid JSON only: {"chronicle":"Your 2-3 sentence chronicle text here"}`;
+
+    const systemPrompt = 'You are chronicler for a tribal village, writing in an ancient oral tradition style. Keep entries brief but vivid. Always respond with valid JSON.';
 
     const result = await this.generate(prompt, systemPrompt);
 
@@ -367,7 +431,10 @@ The style should be evocative and memorable, as if passed down through generatio
       mood: v.mood,
       status: v.status,
       position: { x: Math.round(v.x), y: Math.round(v.y) },
-      relationships: v.relationships ? Object.entries(v.relationships).slice(0, 3).map(([name, score]) => `${name}: ${score}`) : [],
+      relationships: v.relationships ? Object.entries(v.relationships).slice(0, 3).map(([key, score]) => {
+        const name = v.getRelationshipDisplayName?.(key) || key;
+        return `${name}: ${score}`;
+      }) : [],
       goals: v.goals?.filter(g => !g.completed).slice(0, 1).map(g => g.description) || []
     }));
 
@@ -415,20 +482,8 @@ Rules:
       return result.actions;
     }
 
-    // Fallback actions with movement
-    return villagers.map((v, i) => {
-      // Generate some random movement towards village center or nearby
-      const targetX = 32 + Math.round(Math.sin(i * 1.5) * 5);
-      const targetY = 32 + Math.round(Math.cos(i * 1.5) * 5);
-      return {
-        villagerId: v.id,
-        action: 'working',
-        moveTo: { x: targetX, y: targetY },
-        duration: 5,
-        speechEmoji: '💬',
-        speechTheme: 'Heading out to work'
-      };
-    });
+    // Schema-matching fallback for consumers expecting villagerId/action
+    return this.getFallbackVillagerActions(villagers).actions;
   }
 
   // Generate ritual dialogue
@@ -459,9 +514,11 @@ Output JSON with: narration (2-3 sentences of sensory description), chant (optio
 
 Secret: ${secret.description}
 Source personality: ${sourceVillager.personality.sociable > 50 ? 'Sociable and talkative' : 'More reserved'}
-Relationship to target: ${sourceVillager.relationships?.[targetVillager.name] || 0}
+Relationship to target: ${(sourceVillager.getRelationship?.(targetVillager) ?? sourceVillager.relationships?.[targetVillager.id] ?? sourceVillager.relationships?.[targetVillager.name] ?? 0)}
 
-The gossip should be slightly embellished but not complete fiction - rumors that have a grain of truth.`;
+The gossip should be slightly embellished but not complete fiction - rumors that have a grain of truth.
+
+Respond with valid JSON only: {"gossip":"Your 1-2 sentence gossip text here"}`;
 
     const result = await this.generate(prompt);
 
@@ -621,3 +678,6 @@ Output JSON with:
 
 // Global instance
 const llm = new LLMManager();
+if (typeof window !== 'undefined') {
+  window.llm = llm;
+}
