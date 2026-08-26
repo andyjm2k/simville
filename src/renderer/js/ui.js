@@ -326,19 +326,21 @@ class UIManager {
     });
 
     // Status with activity description
-    const activityText = this.formatVillagerDisplayText(villager.currentAction?.activity || villager.activity || 'Idle');
-    this.elements.villagerStatus.innerHTML = `Status: <span>${villager.status}</span><br><small>${activityText}</small>`;
+    const activityText = Utils.escapeHtml(this.formatVillagerDisplayText(villager.currentAction?.activity || villager.activity || 'Idle'));
+    const statusText = Utils.escapeHtml(villager.status);
+    this.elements.villagerStatus.innerHTML = `Status: <span>${statusText}</span><br><small>${activityText}</small>`;
 
     // Mood
     const moodInfo = Utils.getMoodDescription(villager.mood);
-    this.elements.villagerMood.innerHTML = `Mood: <span class="mood-value ${moodInfo.class}">${moodInfo.text} (${villager.mood})</span>`;
+    this.elements.villagerMood.innerHTML = `Mood: <span class="mood-value ${moodInfo.class}">${Utils.escapeHtml(moodInfo.text)} (${villager.mood})</span>`;
 
-    // Partnership info
+    // Partnership info — do not leak undiscovered affairs (💔)
     if (villager.partnerId) {
       const partner = window.game?.villagers?.find(v => v.id === villager.partnerId);
       if (partner) {
-        const affair = villager.affairPartnerId ? ' 💔' : ' 💑';
-        this.elements.villagerMood.innerHTML += `<br><small>Partner: ${partner.name}${affair}</small>`;
+        const showAffair = !!(villager.affairPartnerId && this.isAffairDiscovered(villager));
+        const partnerMark = showAffair ? ' 💔' : ' 💑';
+        this.elements.villagerMood.innerHTML += `<br><small>Partner: ${Utils.escapeHtml(partner.name)}${partnerMark}</small>`;
       }
     } else {
       this.elements.villagerMood.innerHTML += `<br><small>Single</small>`;
@@ -380,9 +382,9 @@ class UIManager {
           build: '🔨'
         }[interaction.type] || '💬';
 
-        const target = this.formatVillagerDisplayText(interaction.target);
-        const description = this.formatVillagerDisplayText(interaction.description);
-        li.innerHTML = `<span>${emoji}</span> <strong>${target}:</strong> ${Utils.truncate(description, 35)}`;
+        const target = Utils.escapeHtml(this.formatVillagerDisplayText(interaction.target));
+        const description = Utils.escapeHtml(Utils.truncate(this.formatVillagerDisplayText(interaction.description), 35));
+        li.innerHTML = `<span>${emoji}</span> <strong>${target}:</strong> ${description}`;
         this.elements.villagerInteractionList.appendChild(li);
       });
     }
@@ -401,10 +403,13 @@ class UIManager {
       activeGoals.slice(0, 3).forEach(goal => {
         const li = document.createElement('li');
         li.className = 'goal-item';
+        const goalDesc = Utils.escapeHtml(this.formatVillagerDisplayText(goal.description));
+        const difficulty = Utils.escapeHtml(goal.difficulty);
+        const progress = Number(goal.progress) || 0;
         li.innerHTML = `
-          <div>${this.formatVillagerDisplayText(goal.description)}</div>
-          <div class="goal-progress"><div class="goal-progress-fill" style="width: ${goal.progress}%"></div></div>
-          <small>${goal.difficulty} | ${goal.progress}%</small>
+          <div>${goalDesc}</div>
+          <div class="goal-progress"><div class="goal-progress-fill" style="width: ${progress}%"></div></div>
+          <small>${difficulty} | ${progress}%</small>
         `;
         this.elements.villagerGoalsList.appendChild(li);
       });
@@ -474,6 +479,15 @@ class UIManager {
     return text === null || text === undefined ? '' : String(text);
   }
 
+  /** Affaires stay hidden in UI until discovered (affairDiscovered or revealed secret). */
+  isAffairDiscovered(villager) {
+    if (!villager) return false;
+    if (villager.affairDiscovered) return true;
+    return (villager.secrets || []).some(
+      s => s.type === 'forbidden_romance' && s.revealed
+    );
+  }
+
   updateNeedsBars(villager) {
     this.ensureNeedsBars();
 
@@ -507,19 +521,21 @@ class UIManager {
     if (!panel || panel.classList.contains('hidden')) return;
 
     // Update status and activity
-    const activityText = this.formatVillagerDisplayText(villager.currentAction?.activity || villager.activity || 'Idle');
-    this.elements.villagerStatus.innerHTML = `Status: <span>${villager.status}</span><br><small>${activityText}</small>`;
+    const activityText = Utils.escapeHtml(this.formatVillagerDisplayText(villager.currentAction?.activity || villager.activity || 'Idle'));
+    const statusText = Utils.escapeHtml(villager.status);
+    this.elements.villagerStatus.innerHTML = `Status: <span>${statusText}</span><br><small>${activityText}</small>`;
 
     // Update mood
     const moodInfo = Utils.getMoodDescription(villager.mood);
-    let moodHtml = `Mood: <span class="mood-value ${moodInfo.class}">${moodInfo.text} (${villager.mood})</span>`;
+    let moodHtml = `Mood: <span class="mood-value ${moodInfo.class}">${Utils.escapeHtml(moodInfo.text)} (${villager.mood})</span>`;
 
-    // Partnership info
+    // Partnership info — do not leak undiscovered affairs (💔)
     if (villager.partnerId) {
       const partner = window.game?.villagers?.find(v => v.id === villager.partnerId);
       if (partner) {
-        const affair = villager.affairPartnerId ? ' 💔' : ' 💑';
-        moodHtml += `<br><small>Partner: ${partner.name}${affair}</small>`;
+        const showAffair = !!(villager.affairPartnerId && this.isAffairDiscovered(villager));
+        const partnerMark = showAffair ? ' 💔' : ' 💑';
+        moodHtml += `<br><small>Partner: ${Utils.escapeHtml(partner.name)}${partnerMark}</small>`;
       }
     } else {
       moodHtml += `<br><small>Single</small>`;
@@ -610,7 +626,7 @@ class UIManager {
         const li = document.createElement('li');
         li.className = 'chronicle-entry';
         const daysLeft = Math.max(0, rule.durationDays - (window.game.timeState.day - rule.createdDay));
-        li.innerHTML = `<span class="entry-day">${rule.title}</span>: ${rule.edict}<br><small>${rule.category} | ${Math.round(rule.compliance)}% compliance | ${daysLeft} days left</small>`;
+        li.innerHTML = `<span class="entry-day">${Utils.escapeHtml(rule.title)}</span>: ${Utils.escapeHtml(rule.edict)}<br><small>${Utils.escapeHtml(rule.category)} | ${Math.round(rule.compliance)}% compliance | ${daysLeft} days left</small>`;
         this.elements.chronicleRuleList.appendChild(li);
       });
     }
@@ -631,7 +647,7 @@ class UIManager {
     pageEntries.forEach(entry => {
       const li = document.createElement('li');
       li.className = 'chronicle-entry';
-      li.innerHTML = `<span class="entry-day">Day ${entry.day}</span>: ${entry.text}`;
+      li.innerHTML = `<span class="entry-day">Day ${Utils.escapeHtml(entry.day)}</span>: ${Utils.escapeHtml(entry.text)}`;
       this.elements.chronicleEntryList.appendChild(li);
     });
 
@@ -658,14 +674,15 @@ class UIManager {
     // Current research
     const currentResearch = game.getTechResearchProgress();
     if (currentResearch) {
+      const pct = Number(currentResearch.percent) || 0;
       researchInfo.innerHTML = `
         <div class="tech-item researching">
-          <span class="tech-icon">${currentResearch.tech.icon}</span>
-          <span class="tech-name">${currentResearch.tech.name}</span>
+          <span class="tech-icon">${Utils.escapeHtml(currentResearch.tech.icon)}</span>
+          <span class="tech-name">${Utils.escapeHtml(currentResearch.tech.name)}</span>
           <div class="tech-progress-bar">
-            <div class="tech-progress-fill" style="width: ${currentResearch.percent}%"></div>
+            <div class="tech-progress-fill" style="width: ${pct}%"></div>
           </div>
-          <span class="tech-progress-text">${currentResearch.percent}%</span>
+          <span class="tech-progress-text">${pct}%</span>
         </div>
       `;
     } else {
@@ -691,13 +708,13 @@ class UIManager {
           .join(', ');
 
         item.innerHTML = `
-          <span class="tech-icon">${tech.icon}</span>
+          <span class="tech-icon">${Utils.escapeHtml(tech.icon)}</span>
           <div class="tech-info">
-            <span class="tech-name">${tech.name}</span>
-            <span class="tech-tier">Tier ${tech.tier}</span>
-            <span class="tech-desc">${tech.description}</span>
-            ${tech.prerequisites.length > 0 ? `<span class="tech-prereqs">Requires: ${prereqNames}</span>` : ''}
-            <span class="tech-time">Research time: ${tech.researchTime} days</span>
+            <span class="tech-name">${Utils.escapeHtml(tech.name)}</span>
+            <span class="tech-tier">Tier ${Utils.escapeHtml(tech.tier)}</span>
+            <span class="tech-desc">${Utils.escapeHtml(tech.description)}</span>
+            ${tech.prerequisites.length > 0 ? `<span class="tech-prereqs">Requires: ${Utils.escapeHtml(prereqNames)}</span>` : ''}
+            <span class="tech-time">Research time: ${Utils.escapeHtml(tech.researchTime)} days</span>
           </div>
         `;
 
@@ -725,10 +742,10 @@ class UIManager {
         const item = document.createElement('div');
         item.className = 'tech-item researched';
         item.innerHTML = `
-          <span class="tech-icon">${tech.icon}</span>
+          <span class="tech-icon">${Utils.escapeHtml(tech.icon)}</span>
           <div class="tech-info">
-            <span class="tech-name">${tech.name}</span>
-            <span class="tech-tier">Tier ${tech.tier}</span>
+            <span class="tech-name">${Utils.escapeHtml(tech.name)}</span>
+            <span class="tech-tier">Tier ${Utils.escapeHtml(tech.tier)}</span>
           </div>
         `;
         researchedList.appendChild(item);

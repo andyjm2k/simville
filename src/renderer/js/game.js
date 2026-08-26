@@ -961,9 +961,9 @@ class Game {
           const li = document.createElement('li');
           li.className = 'goal-item';
           li.innerHTML = `
-            <div>${goal.description}</div>
-            <div class="goal-progress"><div class="goal-progress-fill" style="width: ${goal.progress}%"></div></div>
-            <small>${goal.difficulty} | ${goal.progress}%</small>
+            <div>${Utils.escapeHtml(goal.description)}</div>
+            <div class="goal-progress"><div class="goal-progress-fill" style="width: ${Number(goal.progress) || 0}%"></div></div>
+            <small>${Utils.escapeHtml(goal.difficulty)} | ${Number(goal.progress) || 0}%</small>
           `;
           this.ui.elements.villagerGoalsList.appendChild(li);
         });
