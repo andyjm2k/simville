@@ -86,6 +86,13 @@ class Game {
     this.raidSystem = null;
     this.diplomacySystem = null;
     this.hudVillageId = null;
+
+    // Benchmark mode (headless LLM vs opponent)
+    this.benchmarkMode = false;
+    this.benchmarkAgents = {};
+    this.benchmarkAgentMeta = {};
+    this.benchmarkEvents = [];
+    this.skipBackstories = false;
   }
 
   // Get village by ID
@@ -278,7 +285,21 @@ class Game {
       theirStrength: otherVillage.calculateStrength(this.villagers)
     };
 
-    const decision = await llm.generateDiplomaticAction(village, otherVillage, context);
+    const agent = this.benchmarkMode ? this.getBenchmarkAgent(villageId) : null;
+    let decision;
+
+    if (agent?.type === 'baseline') {
+      decision = agent.generateDiplomaticAction(village, otherVillage, context);
+    } else if (agent?.llm) {
+      const start = Date.now();
+      decision = await agent.llm.generateDiplomaticAction(village, otherVillage, context);
+      agent.stats.diplomacyCalls += 1;
+      agent.stats.calls += 1;
+      agent.stats.totalLatencyMs += Date.now() - start;
+      if (agent.llm.offline) agent.stats.failures += 1;
+    } else {
+      decision = await llm.generateDiplomaticAction(village, otherVillage, context);
+    }
 
     if (decision && decision.action) {
       // Create diplomatic event
@@ -297,6 +318,15 @@ class Game {
       // If raid, start immediately
       if (decision.action === 'raid') {
         this.startRaid(villageId, otherVillage.id);
+      }
+
+      if (this.benchmarkMode) {
+        this.recordBenchmarkEvent('diplomacy', {
+          villageId,
+          slot: this.benchmarkAgentMeta[villageId]?.slot,
+          action: decision.action,
+          reason: decision.reason
+        });
       }
     }
   }
@@ -1313,6 +1343,15 @@ class Game {
   }
 
   onNewDay() {
+    if (this.benchmarkMode) {
+      // Keep benchmark runs competitive (decisions) rather than starvation-dominated
+      this.villagers.forEach(v => {
+        v.hunger = Math.max(v.hunger, 45);
+        v.thirst = Math.max(v.thirst ?? 100, 45);
+        v.health = Math.max(v.health, 60);
+      });
+    }
+
     this.regrowWorldResources();
     this.produceStructureResources();
     this.clampStoredResources();
@@ -2150,6 +2189,313 @@ class Game {
     if (tile) villager.moveTo(tile.x, tile.y, this.world);
   }
 
+  async initializeHeadless(options = {}) {
+    this.benchmarkMode = true;
+    this.benchmarkEvents = [];
+    this.benchmarkAgents = {};
+    this.benchmarkAgentMeta = {};
+    this.skipBackstories = options.skipBackstories !== false;
+
+    const seed = options.seed ?? 4242;
+    Utils.setSeed(seed);
+
+    const dayLengthMs = options.dayLengthMs || 60000;
+    this.timeState.hourDuration = dayLengthMs / 24;
+    this.timeState.dayDuration = dayLengthMs;
+    this.tickInterval = options.tickIntervalMs || 5000;
+    this.simSpeed = 1;
+    this.paused = false;
+    this.tickAccumulator = 0;
+    this.tickCount = 0;
+
+    this.world = new World(64);
+    this.world.seed = seed;
+    this.world.generate();
+    if (typeof this.ensureVillageResourceAccess === 'function') {
+      this.ensureVillageResourceAccess();
+    }
+
+    this.villagers = [];
+    this.villages = [];
+    this.constructionProjects = [];
+    this.diplomaticEvents = [];
+    this.activeRaid = null;
+    this.hostileDaysCount = {};
+    this.nextChieftanDecision = {};
+
+    this.createVillages(2);
+    this.economy = new Economy(this);
+    this.raidSystem = new RaidSystem(this);
+    this.diplomacySystem = new DiplomacySystem(this);
+
+    this.createInitialVillagers();
+    this.assignVillagersToVillages();
+    this.initializeVillageRelationships();
+    this.createStartingStructures();
+
+    this.timeState.day = 1;
+    this.timeState.hours = 6;
+    this.timeState.season = CONSTANTS.SEASON.WET;
+    this.timeState.dayInSeason = 1;
+
+    if (this.skipBackstories) {
+      this.seedBenchmarkVillagers();
+    } else {
+      await this.generateInitialBackstories();
+    }
+  }
+
+  seedBenchmarkVillagers() {
+    for (const villager of this.villagers) {
+      villager.backstory = llm.generateFallbackBackstory(villager);
+      villager.goals = this.normalizeGoals(this.getFallbackGoals(villager), villager);
+    }
+  }
+
+  getBenchmarkAgent(villageId) {
+    return this.benchmarkAgents?.[villageId] || null;
+  }
+
+  getRivalVillage(villageId) {
+    return this.villages.find(v => v.id !== villageId) || null;
+  }
+
+  buildWorldStateForVillage(village, rival = null) {
+    const structureIds = new Set(village.structureIds || []);
+    const rivalInfo = rival ? {
+      id: rival.id,
+      name: rival.name,
+      population: this.getVillagersForVillage(rival.id).length,
+      resources: this.getResources(rival.id),
+      relation: village.relations?.[rival.id] || 0,
+      atWar: village.atWarWith?.includes(rival.id) || false,
+      strength: Math.round(rival.calculateStrength(this.villagers) * 10) / 10
+    } : null;
+
+    return {
+      resources: this.getResources(village.id),
+      structures: this.world.structures
+        .filter(s => structureIds.has(s.id))
+        .map(s => ({ type: s.type, x: s.x, y: s.y })),
+      population: this.getVillagersForVillage(village.id).length,
+      villageCenter: { ...village.center },
+      villageName: village.name,
+      rivalVillage: rivalInfo
+    };
+  }
+
+  recordBenchmarkEvent(type, data = {}) {
+    if (!this.benchmarkEvents) this.benchmarkEvents = [];
+    this.benchmarkEvents.push({
+      day: this.timeState.day,
+      hour: this.timeState.hours,
+      type,
+      ...data
+    });
+  }
+
+  applyVillagerActions(actions) {
+    let applied = 0;
+    const notableEvents = [];
+
+    for (const rawAction of actions || []) {
+      const action = this.sanitizeVillagerAction(rawAction);
+      const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
+      if (!villager) continue;
+
+      const hasCriticalNeeds = villager.hunger < 30 || (villager.thirst ?? 100) < 30 || villager.energy < 15;
+      const isSurvivalAction = action.action === CONSTANTS.ACTIVITY.EATING ||
+        action.action === CONSTANTS.ACTIVITY.DRINKING ||
+        action.action === CONSTANTS.ACTIVITY.GATHERING ||
+        action.action === CONSTANTS.ACTIVITY.RESTING ||
+        action.action === CONSTANTS.ACTIVITY.SLEEPING ||
+        action.action === CONSTANTS.ACTIVITY.HUNTING ||
+        action.action === CONSTANTS.ACTIVITY.FISHING;
+
+      if (hasCriticalNeeds && !isSurvivalAction) {
+        const villageResources = this.getResources(villager.villageId);
+        if ((villager.thirst ?? 100) < 30 && villageResources.water > 0) {
+          villager.status = CONSTANTS.ACTIVITY.DRINKING;
+          villager.activity = 'Desperate for water';
+          continue;
+        }
+        if (villager.hunger < 30 && villageResources.food > 0) {
+          villager.status = CONSTANTS.ACTIVITY.EATING;
+          villager.activity = 'Desperate for food';
+          continue;
+        }
+        if (villager.energy < 15) {
+          villager.status = CONSTANTS.ACTIVITY.RESTING;
+          villager.activity = 'Collapsing from exhaustion';
+          continue;
+        }
+        continue;
+      }
+
+      const villageResources = this.getResources(villager.villageId);
+      if ((villager.thirst ?? 100) < 35 && villageResources.water > 0) {
+        villager.status = CONSTANTS.ACTIVITY.DRINKING;
+        villager.activity = 'Drinking from village water stores';
+        applied += 1;
+        continue;
+      }
+      if (villager.hunger < 35 && villageResources.food > 0) {
+        villager.status = CONSTANTS.ACTIVITY.EATING;
+        villager.activity = 'Eating from the village stores';
+        applied += 1;
+        continue;
+      }
+
+      villager.applyAction(action);
+      applied += 1;
+
+      if (action.moveTo) {
+        villager.moveTo(action.moveTo.x, action.moveTo.y, this.world);
+      }
+
+      if (action.action === 'gathering') {
+        this.handleGathering(villager, action.resourceType || action.target);
+      }
+      if (action.action === 'hunting') {
+        this.handleHunting(villager);
+      }
+      if (action.action === 'fishing') {
+        this.handleFishing(villager);
+      }
+      if (action.action === 'drinking') {
+        villager.status = CONSTANTS.ACTIVITY.DRINKING;
+        villager.activity = 'Drinking from village water stores';
+      }
+      if (action.action === 'building') {
+        const requestedStructure = this.normalizeStructureType(action.structure || action.structureType || action.target) ||
+          this.chooseNeededStructure();
+        if (requestedStructure) {
+          this.startConstructionProject(requestedStructure, { source: 'villager', builderId: villager.id });
+        }
+      }
+
+      if (action.interactionTarget) {
+        const target = this.villagers.find(v => v.name === action.interactionTarget || v.id === action.interactionTarget);
+        if (target) {
+          const dist = Utils.distance(villager.x, villager.y, target.x, target.y);
+          if (dist <= CONSTANTS.INTERACTION.PROXIMITY_REQUIRED) {
+            const relChange = action.interactionType === 'argue' ? -5 : 3;
+            villager.modifyRelationship(target.id, relChange);
+            target.modifyRelationship(villager.id, relChange);
+          }
+        }
+      }
+    }
+
+    return applied;
+  }
+
+  async runHeadlessTick(deltaTime) {
+    const scaledDelta = deltaTime * this.simSpeed;
+    const prevHours = this.timeState.hours;
+
+    this.updateTime(scaledDelta);
+    this.checkTimeOfDayTransition(prevHours);
+    this.updateVillagers(scaledDelta);
+
+    this.survivalAccumulator += scaledDelta;
+    if (this.survivalAccumulator >= this.survivalInterval) {
+      this.survivalAccumulator = 0;
+      this.runSurvivalBehaviors();
+    }
+
+    this.constructionAccumulator += scaledDelta;
+    if (this.constructionAccumulator >= this.constructionInterval) {
+      this.processConstructionProjects(this.constructionAccumulator);
+      this.constructionAccumulator = 0;
+    }
+
+    this.processTechResearch(scaledDelta);
+    this.goalAccumulator += scaledDelta;
+    if (this.goalAccumulator >= this.goalInterval) {
+      this.processPersonalGoals();
+      this.goalAccumulator = 0;
+    }
+
+    this.tickAccumulator += scaledDelta;
+    if (this.tickAccumulator >= this.tickInterval) {
+      this.tickAccumulator = 0;
+      await this.llmTickBenchmark();
+    }
+
+    this.processEventQueue();
+    this.processDiplomaticEvents();
+    this.processRaid(scaledDelta);
+    this.processChieftanDecisions();
+    this.checkDeaths();
+
+    if (this.benchmarkMode) {
+      for (const v of this.villagers) {
+        v.hunger = Math.max(v.hunger, 35);
+        v.thirst = Math.max(v.thirst ?? 100, 35);
+        v.health = Math.max(v.health, 40);
+      }
+    }
+  }
+
+  async llmTickBenchmark() {
+    if (this.paused || this.isGeneratingActions) return;
+    this.isGeneratingActions = true;
+    this.tickCount += 1;
+
+    try {
+      for (const village of this.villages) {
+        const agent = this.getBenchmarkAgent(village.id);
+        if (!agent) continue;
+
+        const villageVillagers = this.getVillagersForVillage(village.id);
+        if (!villageVillagers.length) continue;
+
+        const rival = this.getRivalVillage(village.id);
+        const worldState = this.buildWorldStateForVillage(village, rival);
+        const timeState = {
+          day: this.timeState.day,
+          hours: this.timeState.hours,
+          season: this.timeState.season,
+          dayInSeason: this.timeState.dayInSeason
+        };
+
+        const start = Date.now();
+        let actions = [];
+
+        if (agent.type === 'baseline') {
+          actions = agent.generateVillagerActions(villageVillagers, worldState, timeState, this);
+        } else {
+          try {
+            actions = await agent.llm.generateVillagerActions(villageVillagers, worldState, timeState);
+            agent.stats.calls += 1;
+            agent.stats.actionsGenerated += actions.length;
+            agent.stats.totalLatencyMs += Date.now() - start;
+            if (agent.llm.offline) agent.stats.failures += 1;
+          } catch (err) {
+            agent.stats.failures += 1;
+            actions = agent.llm.getFallbackVillagerActions(villageVillagers).actions;
+          }
+        }
+
+        const applied = this.applyVillagerActions(actions);
+        if (agent.stats) {
+          agent.stats.actionsApplied = (agent.stats.actionsApplied || 0) + applied;
+        }
+
+        this.recordBenchmarkEvent('villager_tick', {
+          villageId: village.id,
+          slot: this.benchmarkAgentMeta[village.id]?.slot,
+          actionCount: actions.length,
+          applied,
+          latencyMs: Date.now() - start
+        });
+      }
+    } finally {
+      this.isGeneratingActions = false;
+    }
+  }
+
   async llmTick() {
     // Skip if paused
     if (this.paused) return;
@@ -2170,8 +2516,8 @@ class Game {
       this.addChronicleEntry(greetings[timeOfDay] || 'Life continues in Simville.');
     }
 
-    // Check if LLM is configured
-    if (!llm.config?.llm?.apiKey) {
+    // Check if LLM is configured (endpoint required; key optional for local servers)
+    if (!llm.config?.llm?.endpoint) {
       // No API key - villagers use built-in wandering behavior
       this.showFallbackActionBubbles();
 
@@ -3398,6 +3744,7 @@ Respond with JSON: {
 
   async performRitual(ritualDef) {
     if (!ritualDef) return;
+
     const participants = this.villagers.filter(v => {
       if (ritualDef.participants === 'all') return v.status !== CONSTANTS.ACTIVITY.SLEEPING;
       if (ritualDef.participants === 'adults') {
@@ -3406,8 +3753,14 @@ Respond with JSON: {
       return true;
     });
 
-    // No participants - skip ritual
     if (participants.length === 0) return;
+
+    if (this.benchmarkMode) {
+      participants.forEach(v => {
+        v.mood = Math.min(100, (v.mood || 0) + (ritualDef.moodBoost || 0));
+      });
+      return;
+    }
 
     // Apply ritual effects
     participants.forEach(v => {
@@ -3900,6 +4253,7 @@ Respond with JSON: {
   }
 
   addChronicleEntry(text, type = 'normal') {
+    if (this.benchmarkMode) return;
     const entry = {
       text,
       day: this.timeState.day,

@@ -48,11 +48,17 @@ function loadScript(relPath, sandbox) {
 ;if (typeof Economy !== 'undefined') globalThis.Economy = Economy;
 ;if (typeof RaidSystem !== 'undefined') globalThis.RaidSystem = RaidSystem;
 ;if (typeof DiplomacySystem !== 'undefined') globalThis.DiplomacySystem = DiplomacySystem;
+;if (typeof BaselineAgent !== 'undefined') globalThis.BaselineAgent = BaselineAgent;
+;if (typeof BenchmarkScorer !== 'undefined') globalThis.BenchmarkScorer = BenchmarkScorer;
+;if (typeof BenchmarkRunner !== 'undefined') globalThis.BenchmarkRunner = BenchmarkRunner;
 ;if (typeof module !== 'undefined' && module.exports) {
   const exported = module.exports;
   if (exported.Economy) globalThis.Economy = exported.Economy;
   if (exported.RaidSystem) globalThis.RaidSystem = exported.RaidSystem;
   if (exported.DiplomacySystem) globalThis.DiplomacySystem = exported.DiplomacySystem;
+  if (exported.BaselineAgent) globalThis.BaselineAgent = exported.BaselineAgent;
+  if (exported.BenchmarkScorer) globalThis.BenchmarkScorer = exported.BenchmarkScorer;
+  if (exported.BenchmarkRunner) globalThis.BenchmarkRunner = exported.BenchmarkRunner;
 }
 `;
   vm.runInContext(code, sandbox, { filename: relPath });
@@ -63,8 +69,10 @@ loadScript('src/renderer/js/constants.js', sandbox);
 loadScript('src/renderer/js/systems/economy.js', sandbox);
 loadScript('src/renderer/js/systems/raid.js', sandbox);
 loadScript('src/renderer/js/systems/diplomacy.js', sandbox);
+loadScript('src/renderer/js/systems/baseline-agent.js', sandbox);
+loadScript('src/renderer/js/systems/benchmark.js', sandbox);
 
-const { Utils, CONSTANTS, Economy, RaidSystem, DiplomacySystem } = sandbox;
+const { Utils, CONSTANTS, Economy, RaidSystem, DiplomacySystem, BaselineAgent, BenchmarkScorer } = sandbox;
 
 let passed = 0;
 let failed = 0;
@@ -432,6 +440,51 @@ test('generateId is unique under same seed progression', () => {
 test('clamp bounds values', () => {
   assert.strictEqual(Utils.clamp(150, 0, 100), 100);
   assert.strictEqual(Utils.clamp(-5, 0, 100), 0);
+});
+
+console.log('\nBaselineAgent');
+test('baseline generates actions for each villager', () => {
+  const agent = new BaselineAgent();
+  const game = makeGame([makeVillage('a')]);
+  game.getVillage = () => makeVillage('a');
+  game.world = { villageCenter: { x: 32, y: 32 }, getWalkableTileNear: () => ({ x: 32, y: 33 }) };
+  game.findNearestResource = () => null;
+  const villagers = [{ id: 'v1', x: 32, y: 32, hunger: 50, thirst: 80, energy: 70, villageId: 'a', isChieftan: false }];
+  const actions = agent.generateVillagerActions(
+    villagers,
+    { resources: { food: 2, water: 10, wood: 5 }, villageCenter: { x: 32, y: 32 } },
+    { day: 1, hours: 8, season: CONSTANTS.SEASON.WET, dayInSeason: 1 },
+    game
+  );
+  assert.strictEqual(actions.length, 1);
+  assert.strictEqual(actions[0].villagerId, 'v1');
+});
+
+test('baseline prefers raid when strong and hostile', () => {
+  const agent = new BaselineAgent();
+  const village = makeVillage('a');
+  village.relations = { b: -50 };
+  village.raidCooldown = 0;
+  const other = makeVillage('b');
+  const decision = agent.generateDiplomaticAction(village, other, { yourStrength: 120, theirStrength: 80 });
+  assert.strictEqual(decision.action, 'raid');
+});
+
+console.log('\nBenchmarkScorer');
+test('resourceScore weights food and water', () => {
+  const score = BenchmarkScorer.resourceScore({ food: 10, water: 5, wood: 0 });
+  assert.strictEqual(score, 10 * 2 + 5 * 2);
+});
+
+test('determineWinner picks higher composite score', () => {
+  const game = makeGame([makeVillage('a'), makeVillage('b')]);
+  const snapshots = [
+    { agent: { slot: 'A' }, villageName: 'A', population: 5, compositeScore: 200 },
+    { agent: { slot: 'B' }, villageName: 'B', population: 5, compositeScore: 150 }
+  ];
+  const outcome = BenchmarkScorer.determineWinner(snapshots, game);
+  assert.strictEqual(outcome.winner, 'A');
+  assert.strictEqual(outcome.reason, 'composite_score');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
