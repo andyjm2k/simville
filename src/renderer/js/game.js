@@ -84,6 +84,7 @@ class Game {
     // Economy / raid systems (instantiated once villages exist)
     this.economy = null;
     this.raidSystem = null;
+    this.diplomacySystem = null;
     this.hudVillageId = null;
   }
 
@@ -236,52 +237,17 @@ class Game {
 
   // Trigger war between villages
   triggerWar(villageId1, villageId2) {
-    const v1 = this.getVillage(villageId1);
-    const v2 = this.getVillage(villageId2);
-    if (!v1 || !v2) return;
-
-    if (!v1.atWarWith.includes(villageId2)) {
-      v1.atWarWith.push(villageId2);
-    }
-    if (!v2.atWarWith.includes(villageId1)) {
-      v2.atWarWith.push(villageId1);
-    }
-
-    // Update relations
-    v1.relations[villageId2] = Math.min(v1.relations[villageId2] || 0, CONSTANTS.VILLAGE_RELATION.WAR_THRESHOLD - 10);
-    v2.relations[villageId1] = Math.min(v2.relations[villageId1] || 0, CONSTANTS.VILLAGE_RELATION.WAR_THRESHOLD - 10);
-
-    this.addChronicleEntry(`War has broken out between ${v1.name} and ${v2.name}! The tribes prepare for conflict.`);
+    this.diplomacySystem?.triggerWar(villageId1, villageId2);
   }
 
   // End war and negotiate peace
   endWar(villageId1, villageId2) {
-    const v1 = this.getVillage(villageId1);
-    const v2 = this.getVillage(villageId2);
-    if (!v1 || !v2) return;
-
-    v1.atWarWith = v1.atWarWith.filter(id => id !== villageId2);
-    v2.atWarWith = v2.atWarWith.filter(id => id !== villageId1);
-
-    // Improve relations but not to neutral
-    v1.relations[villageId2] = Math.max(v1.relations[villageId2] || 0, CONSTANTS.VILLAGE_RELATION.HOSTILE_THRESHOLD);
-    v2.relations[villageId1] = Math.max(v2.relations[villageId1] || 0, CONSTANTS.VILLAGE_RELATION.HOSTILE_THRESHOLD);
-
-    this.addChronicleEntry(`Peace has been negotiated between ${v1.name} and ${v2.name}. A new era of cautious relations begins.`);
+    this.diplomacySystem?.endWar(villageId1, villageId2);
   }
 
   // Process diplomatic events — expire by day, not per-frame dayDuration aging
   processDiplomaticEvents() {
-    for (let i = this.diplomaticEvents.length - 1; i >= 0; i--) {
-      const event = this.diplomaticEvents[i];
-      if (event.createdDay == null) {
-        event.createdDay = this.timeState.day;
-      }
-      // Remove old events after 3 days
-      if (this.timeState.day - event.createdDay > 3) {
-        this.diplomaticEvents.splice(i, 1);
-      }
-    }
+    this.diplomacySystem?.processDiplomaticEvents();
   }
 
   // Process active raid if one is ongoing
@@ -342,107 +308,12 @@ class Game {
 
   // Process chieftan diplomatic decisions — day-based delay, not per-frame aging
   processChieftanDecisions() {
-    for (let i = this.diplomaticEvents.length - 1; i >= 0; i--) {
-      const event = this.diplomaticEvents[i];
-      const sourceVillage = this.getVillage(event.sourceVillageId);
-      const targetVillage = this.getVillage(event.targetVillageId);
-      if (!sourceVillage || !targetVillage) {
-        this.diplomaticEvents.splice(i, 1);
-        continue;
-      }
-
-      if (event.createdDay == null) {
-        event.createdDay = this.timeState.day;
-      }
-
-      // Process after day advances (urgency shortens/lengthens wait)
-      const minDays = event.urgency === 'high' ? 0 : event.urgency === 'low' ? 2 : 1;
-      if (this.timeState.day - event.createdDay < minDays) continue;
-
-      switch (event.type) {
-        case 'propose_trade': {
-          // Accept trade - improve relations
-          const currentRelation = sourceVillage.relations[targetVillage.id] || 0;
-          sourceVillage.relations[targetVillage.id] = Math.min(100, currentRelation + 15);
-          targetVillage.relations[sourceVillage.id] = Math.min(100, (targetVillage.relations[sourceVillage.id] || 0) + 15);
-          this.addChronicleEntry(`${sourceVillage.name} and ${targetVillage.name} have established a trade agreement.`);
-          break;
-        }
-        case 'propose_alliance': {
-          // Accept alliance - major relation boost
-          const currentRelation = sourceVillage.relations[targetVillage.id] || 0;
-          sourceVillage.relations[targetVillage.id] = Math.min(100, currentRelation + 40);
-          targetVillage.relations[sourceVillage.id] = Math.min(100, (targetVillage.relations[sourceVillage.id] || 0) + 40);
-          this.addChronicleEntry(`${sourceVillage.name} and ${targetVillage.name} have formed an alliance!`);
-          break;
-        }
-        case 'send_threat': {
-          // Reduce relations, may trigger counter-threat
-          const currentRelation = sourceVillage.relations[targetVillage.id] || 0;
-          sourceVillage.relations[targetVillage.id] = Math.max(-100, currentRelation - 20);
-          targetVillage.relations[sourceVillage.id] = Math.max(-100, (targetVillage.relations[sourceVillage.id] || 0) - 10);
-          this.addChronicleEntry(`${sourceVillage.name} sends threats toward ${targetVillage.name}! Relations worsen.`);
-          break;
-        }
-        case 'ignore':
-          // No effect, just remove
-          break;
-        case 'observe':
-          // No effect, just remove
-          break;
-        case 'raid':
-          // Raid already started via startRaid(), just remove event
-          break;
-      }
-
-      this.diplomaticEvents.splice(i, 1);
-    }
+    this.diplomacySystem?.processChieftanDecisions();
   }
 
   // Evaluate war escalation - check hostile villages daily (unique pairs once)
   evaluateWarEscalation() {
-    if (this.villages.length < 2) return;
-
-    for (let i = 0; i < this.villages.length; i++) {
-      for (let j = i + 1; j < this.villages.length; j++) {
-        const village = this.villages[i];
-        const otherVillage = this.villages[j];
-        const relation = village.relations[otherVillage.id] || 0;
-        const pairKey = [village.id, otherVillage.id].sort().join('_');
-
-        // Check if already at war
-        if (village.atWarWith.includes(otherVillage.id) || otherVillage.atWarWith.includes(village.id)) {
-          // At war - check if should end (relations improved)
-          if (relation >= CONSTANTS.VILLAGE_RELATION.HOSTILE_THRESHOLD) {
-            this.endWar(village.id, otherVillage.id);
-          }
-          continue;
-        }
-
-        // Not at war - check for escalation
-        if (relation < CONSTANTS.VILLAGE_RELATION.WAR_THRESHOLD) {
-          if (!this.hostileDaysCount[pairKey]) {
-            this.hostileDaysCount[pairKey] = 0;
-          }
-          this.hostileDaysCount[pairKey]++;
-
-          if (this.hostileDaysCount[pairKey] >= CONSTANTS.DIPLOMACY.HOSTILE_WAR_THRESHOLD_DAYS) {
-            if (Math.random() < 0.3) {
-              this.triggerWar(village.id, otherVillage.id);
-            }
-          }
-        } else {
-          this.hostileDaysCount[pairKey] = 0;
-        }
-      }
-    }
-
-    // Update raid cooldowns
-    for (const village of this.villages) {
-      if (village.raidCooldown > 0) {
-        village.raidCooldown--;
-      }
-    }
+    this.diplomacySystem?.evaluateWarEscalation();
   }
 
   // Evaluate conquest - check if defender lost enough population
@@ -867,6 +738,7 @@ class Game {
     // Economy / raid systems once villages exist
     this.economy = new Economy(this);
     this.raidSystem = new RaidSystem(this);
+    this.diplomacySystem = new DiplomacySystem(this);
     this.hudVillageId = this.villages[0]?.id || null;
     this.nextChieftanDecision = {};
     this.hostileDaysCount = {};
@@ -4211,6 +4083,7 @@ Respond with JSON: {
       // Instantiate systems after villages restored
       this.economy = new Economy(this);
       this.raidSystem = new RaidSystem(this);
+      this.diplomacySystem = new DiplomacySystem(this);
 
       // Migrate legacy Game.resources orphan pool if present
       if (saveData.resources) {
