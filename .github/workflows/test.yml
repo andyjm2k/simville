@@ -1,0 +1,66 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-and-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run regression suite
+        run: npm test
+
+      - name: Run coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: warn
+
+  targeted-qa-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - world-generation
+          - save-roundtrip
+          - simulation-tick
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run QA suite ${{ matrix.suite }}
+        run: node tests/qa/harness.mjs --suite ${{ matrix.suite }}
