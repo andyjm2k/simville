@@ -146,15 +146,26 @@ const Utils = {
     };
   },
 
+  // Escape user/LLM text before interpolating into innerHTML
+  escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  },
+
   // Capitalize first letter
   capitalize(str) {
     return str.charAt(0).toUpperCase() + str.slice(1);
   },
 
-  // Truncate string
+  // Truncate string (coerce null/undefined)
   truncate(str, maxLength) {
-    if (str.length <= maxLength) return str;
-    return str.slice(0, maxLength - 3) + '...';
+    const text = str === null || str === undefined ? '' : String(str);
+    if (text.length <= maxLength) return text;
+    return text.slice(0, maxLength - 3) + '...';
   },
 
   // Color interpolation
