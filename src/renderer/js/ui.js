@@ -22,6 +22,7 @@ class UIManager {
       btnBuild: document.getElementById('btn-build'),
       btnTech: document.getElementById('btn-tech'),
       btnSettings: document.getElementById('btn-settings'),
+      llmStatus: document.getElementById('llm-status'),
 
       // Resource bar
       resWood: document.getElementById('res-wood'),
@@ -288,6 +289,23 @@ class UIManager {
       const totalPop = villages.reduce((sum, v) => sum + (v.villagerIds?.length || 0), 0);
       this.elements.resPopulation.textContent = totalPop;
     }
+
+    // LLM offline / online indicator
+    if (this.elements.llmStatus) {
+      const llmMgr = window.llm || window.game?.llm || (typeof llm !== 'undefined' ? llm : null);
+      const offline = !!llmMgr?.offline;
+      if (offline) {
+        this.elements.llmStatus.textContent = 'LLM offline';
+        this.elements.llmStatus.classList.add('offline');
+        this.elements.llmStatus.title = 'Using fallback actions — LLM unavailable';
+      } else if (llmMgr) {
+        this.elements.llmStatus.textContent = 'LLM';
+        this.elements.llmStatus.classList.remove('offline');
+        this.elements.llmStatus.title = 'LLM connected';
+      } else {
+        this.elements.llmStatus.textContent = '';
+      }
+    }
   }
 
   formatResourceAmount(value) {
@@ -453,7 +471,10 @@ class UIManager {
     const closeBonds = Object.entries(villager.relationships || {})
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
-      .map(([name, score]) => `${name}: ${villager.getRelationshipType(score)} (${Math.round(score)})`);
+      .map(([key, score]) => {
+        const name = villager.getRelationshipDisplayName?.(key) || key;
+        return `${name}: ${villager.getRelationshipType(score)} (${Math.round(score)})`;
+      });
     if (closeBonds.length) items.push(`Closest bonds: ${closeBonds.join(', ')}`);
 
     if (items.length === 0) {

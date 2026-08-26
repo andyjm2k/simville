@@ -182,11 +182,17 @@ class Game {
       winningVillage.villagerIds.push(v.id);
     });
 
-    // Clear enemy relationship entries by villager identity (not village-name substring)
+    // Clear enemy relationship entries by villager identity (id keys; migrate name keys)
+    const losingIds = new Set(losingVillagers.map(v => v.id));
     const losingNames = new Set(losingVillagers.map(v => v.name));
     const winningRoster = this.getVillagersForVillage(winningVillageId);
     winningRoster.forEach(wv => {
       if (!wv.relationships) return;
+      for (const id of losingIds) {
+        if (wv.relationships[id] !== undefined && priorWinningIds.has(wv.id)) {
+          delete wv.relationships[id];
+        }
+      }
       for (const name of losingNames) {
         if (wv.relationships[name] !== undefined && priorWinningIds.has(wv.id)) {
           delete wv.relationships[name];
@@ -195,6 +201,9 @@ class Game {
       if (!priorWinningIds.has(wv.id)) {
         for (const other of winningRoster) {
           if (!priorWinningIds.has(other.id)) continue;
+          if (wv.relationships[other.id] !== undefined) {
+            delete wv.relationships[other.id];
+          }
           if (wv.relationships[other.name] !== undefined) {
             delete wv.relationships[other.name];
           }
@@ -257,14 +266,15 @@ class Game {
     this.addChronicleEntry(`Peace has been negotiated between ${v1.name} and ${v2.name}. A new era of cautious relations begins.`);
   }
 
-  // Process diplomatic events
+  // Process diplomatic events — expire by day, not per-frame dayDuration aging
   processDiplomaticEvents() {
     for (let i = this.diplomaticEvents.length - 1; i >= 0; i--) {
       const event = this.diplomaticEvents[i];
-      event.age += this.timeState.dayDuration;
-
+      if (event.createdDay == null) {
+        event.createdDay = this.timeState.day;
+      }
       // Remove old events after 3 days
-      if (event.age > 3 * this.timeState.dayDuration) {
+      if (this.timeState.day - event.createdDay > 3) {
         this.diplomaticEvents.splice(i, 1);
       }
     }
@@ -309,6 +319,7 @@ class Game {
         reason: decision.reason || 'No reason given',
         urgency: decision.urgency || 'medium',
         age: 0,
+        createdDay: this.timeState.day,
         chieftanName: chieftan.name
       };
       this.diplomaticEvents.push(event);
@@ -325,7 +336,7 @@ class Game {
     return this.raidSystem?.startRaid(attackerVillageId, targetVillageId);
   }
 
-  // Process chieftan diplomatic decisions
+  // Process chieftan diplomatic decisions — day-based delay, not per-frame aging
   processChieftanDecisions() {
     for (let i = this.diplomaticEvents.length - 1; i >= 0; i--) {
       const event = this.diplomaticEvents[i];
@@ -336,12 +347,13 @@ class Game {
         continue;
       }
 
-      // Age the event - process when urgency warrants
-      const urgencyMultiplier = event.urgency === 'high' ? 0.5 : event.urgency === 'low' ? 2 : 1;
-      event.age += this.timeState.dayDuration * urgencyMultiplier;
+      if (event.createdDay == null) {
+        event.createdDay = this.timeState.day;
+      }
 
-      // Only process after brief aging (so chronicle captures the decision)
-      if (event.age < this.timeState.dayDuration * 0.5) continue;
+      // Process after day advances (urgency shortens/lengthens wait)
+      const minDays = event.urgency === 'high' ? 0 : event.urgency === 'low' ? 2 : 1;
+      if (this.timeState.day - event.createdDay < minDays) continue;
 
       switch (event.type) {
         case 'propose_trade': {
@@ -383,22 +395,19 @@ class Game {
     }
   }
 
-  // Evaluate war escalation - check hostile villages daily
+  // Evaluate war escalation - check hostile villages daily (unique pairs once)
   evaluateWarEscalation() {
     if (this.villages.length < 2) return;
 
     for (let i = 0; i < this.villages.length; i++) {
-      const village = this.villages[i];
-      for (let j = 0; j < this.villages.length; j++) {
-        if (i === j) continue;
+      for (let j = i + 1; j < this.villages.length; j++) {
+        const village = this.villages[i];
         const otherVillage = this.villages[j];
         const relation = village.relations[otherVillage.id] || 0;
-
-        // Create pair key
         const pairKey = [village.id, otherVillage.id].sort().join('_');
 
         // Check if already at war
-        if (village.atWarWith.includes(otherVillage.id)) {
+        if (village.atWarWith.includes(otherVillage.id) || otherVillage.atWarWith.includes(village.id)) {
           // At war - check if should end (relations improved)
           if (relation >= CONSTANTS.VILLAGE_RELATION.HOSTILE_THRESHOLD) {
             this.endWar(village.id, otherVillage.id);
@@ -408,21 +417,17 @@ class Game {
 
         // Not at war - check for escalation
         if (relation < CONSTANTS.VILLAGE_RELATION.WAR_THRESHOLD) {
-          // Count days at hostile relations
           if (!this.hostileDaysCount[pairKey]) {
             this.hostileDaysCount[pairKey] = 0;
           }
           this.hostileDaysCount[pairKey]++;
 
-          // After threshold days, either trigger war or chieftan decides
           if (this.hostileDaysCount[pairKey] >= CONSTANTS.DIPLOMACY.HOSTILE_WAR_THRESHOLD_DAYS) {
-            // Random chance each day after threshold to trigger war
             if (Math.random() < 0.3) {
               this.triggerWar(village.id, otherVillage.id);
             }
           }
         } else {
-          // Relations improved - reset hostile days
           this.hostileDaysCount[pairKey] = 0;
         }
       }
@@ -714,21 +719,43 @@ class Game {
     return 'shared_duty';
   }
 
-  getActiveRules() {
+  getGovernment(villageId = null) {
+    const village = villageId
+      ? this.getVillage(villageId)
+      : (this.villages?.[0] || null);
+
+    if (village) {
+      if (!village.government) {
+        village.government = this.createDefaultGovernment();
+      }
+      // Soft-migrate Game.government → village when village has no rules yet
+      if (this.government?.rules?.length && !(village.government.rules?.length)) {
+        village.government = this.normalizeGovernment(this.government);
+      }
+      village.government = this.normalizeGovernment(village.government);
+      return village.government;
+    }
+
     if (!this.government) this.government = this.createDefaultGovernment();
-    this.government.rules.forEach(rule => {
+    return this.normalizeGovernment(this.government);
+  }
+
+  getActiveRules(villageId = null) {
+    const government = this.getGovernment(villageId);
+    government.rules.forEach(rule => {
       if (this.timeState.day - rule.createdDay >= rule.durationDays) {
         rule.active = false;
       }
     });
-    return this.government.rules.filter(rule => rule.active);
+    return government.rules.filter(rule => rule.active);
   }
 
-  hasActiveRuleEffect(effect) {
-    return this.getActiveRules().some(rule => rule.effect === effect);
+  hasActiveRuleEffect(effect, villageId = null) {
+    return this.getActiveRules(villageId).some(rule => rule.effect === effect);
   }
 
   updateRuleCompliance() {
+    const government = this.getGovernment();
     const rules = this.getActiveRules();
     if (!rules.length) return;
 
@@ -737,13 +764,13 @@ class Game {
       rule.compliance = Utils.clamp(rule.compliance * 0.7 + followed * 0.3, 0, 100);
     });
 
-    this.government.compliance = Math.round(
+    government.compliance = Math.round(
       rules.reduce((sum, rule) => sum + rule.compliance, 0) / rules.length
     );
 
     if (this.timeState.day % 5 === 0) {
-      const state = this.government.compliance >= 75 ? 'strong' :
-        this.government.compliance >= 45 ? 'uneven' : 'weak';
+      const state = government.compliance >= 75 ? 'strong' :
+        government.compliance >= 45 ? 'uneven' : 'weak';
       this.addChronicleEntry(`The village's obedience to the fireside rules is ${state}.`);
     }
   }
@@ -1143,8 +1170,8 @@ class Game {
         const leadershipBonus = a.isChieftan || b.isChieftan ? 5 : 0;
         const warmth = Math.round(((a.personality?.empathetic || 50) + (b.personality?.empathetic || 50) - 100) / 12);
         const score = Utils.clamp(base + leadershipBonus + warmth, 0, 35);
-        a.relationships[b.name] = score;
-        b.relationships[a.name] = score;
+        a.relationships[b.id] = score;
+        b.relationships[a.id] = score;
       }
     }
 
@@ -1158,8 +1185,8 @@ class Game {
       const b = adults.find(other => other.id !== a.id && !paired.has(other.id));
       if (!b) return;
       const score = Utils.randomInt(50, 64);
-      a.relationships[b.name] = Math.max(a.relationships[b.name] || 0, score);
-      b.relationships[a.name] = Math.max(b.relationships[a.name] || 0, score);
+      a.relationships[b.id] = Math.max(a.relationships[b.id] || a.relationships[b.name] || 0, score);
+      b.relationships[a.id] = Math.max(b.relationships[a.id] || b.relationships[a.name] || 0, score);
       paired.add(a.id);
       paired.add(b.id);
     });
@@ -1411,6 +1438,54 @@ class Game {
 
     // Ritual: Morning blessing
     this.performRitual(CONSTANTS.RITUAL.MORNING_BLESSING);
+
+    // Gossip spread for revealed secrets (start of P3)
+    this.processGossipSpread();
+  }
+
+  async processGossipSpread() {
+    for (const owner of this.villagers) {
+      for (const secret of (owner.secrets || [])) {
+        if (!secret.revealed) continue;
+
+        const discovered = secret.discoveredBy || [];
+        const knowers = [owner, ...discovered
+          .map(key => this.villagers.find(v => v.id === key || v.name === key))
+          .filter(Boolean)];
+
+        const candidates = this.villagers.filter(v => {
+          if (v.id === owner.id) return false;
+          if ((v.personality?.sociable || 0) < 45) return false;
+          if (discovered.includes(v.id) || discovered.includes(v.name)) return false;
+          if (knowers.some(k => k.id === v.id)) return false;
+          return true;
+        });
+        if (candidates.length === 0) continue;
+
+        // Chance to spread each day; pick 1–2 sociable listeners
+        if (Utils.randomFloat(0, 1) > 0.45) continue;
+
+        const count = Utils.randomInt(1, Math.min(2, candidates.length));
+        const listeners = Utils.shuffle(candidates).slice(0, count);
+        if (!secret.discoveredBy) secret.discoveredBy = [];
+        const spreader = Utils.randomElement(knowers) || owner;
+
+        for (const listener of listeners) {
+          secret.discoveredBy.push(listener.id);
+          let gossipText = null;
+          try {
+            gossipText = await llm.generateGossip(secret, spreader, owner);
+          } catch (e) {
+            gossipText = null;
+          }
+          if (!gossipText) {
+            gossipText = `${spreader.name} shares whispers about ${owner.name} with ${listener.name}.`;
+          }
+          listener.showSpeechBubble?.('🗣️', Utils.truncate(gossipText, 40), 5000);
+          this.addChronicleEntry(gossipText);
+        }
+      }
+    }
   }
 
   updateFamilySimulation() {
@@ -1425,20 +1500,8 @@ class Game {
   }
 
   ageVillagersIfNeeded() {
-    const daysPerYear = 30;
-    if (this.timeState.day <= 1 || this.timeState.day % daysPerYear !== 0) return;
-
-    this.villagers.forEach(villager => {
-      const oldStage = villager.lifeStage;
-      villager.age += 1;
-      villager.lifeStage = Utils.getLifeStage(villager.age);
-      villager.title = villager.determineTitle();
-
-      if (oldStage.name !== villager.lifeStage.name) {
-        this.addChronicleEntry(`${villager.name} has grown into ${villager.lifeStage.name.toLowerCase()}hood.`, 'normal');
-        this.performRitual(CONSTANTS.RITUAL.COMING_OF_AGE);
-      }
-    });
+    // Continuous aging runs in Villager.update (~1 year / 90 days).
+    // Keep this hook for chronicle/ritual on stage changes that may have been missed.
   }
 
   deepenDailyRelationships() {
@@ -1604,8 +1667,8 @@ class Game {
     parents.forEach(parent => {
       parent.childrenIds = Array.from(new Set([...(parent.childrenIds || []), baby.id]));
       parent.childrenNames = Array.from(new Set([...(parent.childrenNames || []), baby.name]));
-      parent.relationships[baby.name] = 100;
-      baby.relationships[parent.name] = 100;
+      parent.relationships[baby.id] = 100;
+      baby.relationships[parent.id] = 100;
       parent.mood = Math.min(100, parent.mood + 12);
       parent.socialNeed = Math.min(100, parent.socialNeed + 10);
     });
@@ -1613,8 +1676,8 @@ class Game {
     this.villagers
       .filter(v => v.parentIds?.some(parentId => baby.parentIds.includes(parentId)))
       .forEach(sibling => {
-        sibling.relationships[baby.name] = 75;
-        baby.relationships[sibling.name] = 75;
+        sibling.relationships[baby.id] = 75;
+        baby.relationships[sibling.id] = 75;
       });
 
     return baby;
@@ -1697,13 +1760,13 @@ class Game {
   }
 
   getMutualRelationship(a, b) {
-    return ((a.relationships?.[b.name] || 0) + (b.relationships?.[a.name] || 0)) / 2;
+    return (a.getRelationship(b) + b.getRelationship(a)) / 2;
   }
 
   modifyMutualRelationship(a, b, delta) {
     if (!Number.isFinite(delta) || delta === 0) return;
-    a.modifyRelationship(b.name, delta);
-    b.modifyRelationship(a.name, delta);
+    a.modifyRelationship(b, delta);
+    b.modifyRelationship(a, delta);
   }
 
   areCloseFamily(a, b) {
@@ -1787,7 +1850,17 @@ class Game {
 
   updateVillagers(deltaTime) {
     for (const villager of this.villagers) {
-      villager.update(deltaTime, this.world, this.villagers);
+      const event = villager.update(deltaTime, this.world, this.villagers);
+      if (event?.type === 'life_stage_change') {
+        this.addChronicleEntry(
+          `${villager.name} has grown into ${villager.lifeStage.name.toLowerCase()}hood.`,
+          'normal'
+        );
+        if (villager.lifeStage === CONSTANTS.LIFE_STAGE.YOUTH ||
+            villager.lifeStage?.name === 'Youth') {
+          this.performRitual(CONSTANTS.RITUAL.COMING_OF_AGE);
+        }
+      }
     }
   }
 
@@ -2037,7 +2110,7 @@ class Game {
 
     return this.villagers
       .filter(other => other.id !== villager.id)
-      .sort((a, b) => (villager.relationships[b.name] || 0) - (villager.relationships[a.name] || 0))[0] || null;
+      .sort((a, b) => villager.getRelationship(b) - villager.getRelationship(a))[0] || null;
   }
 
   inferGoalSkill(villager, goal) {
@@ -2824,13 +2897,15 @@ class Game {
   }
 
   shouldCreateFallbackRule() {
-    const daysSinceRule = this.timeState.day - (this.government?.lastRuleDay || 0);
+    const government = this.getGovernment();
+    const daysSinceRule = this.timeState.day - (government?.lastRuleDay || 0);
     return daysSinceRule >= 4 && Math.random() < 0.55;
   }
 
   enactChieftanRule(ruleInput, chieftan, focus = 'harmony') {
     if (!ruleInput) return null;
-    this.government = this.normalizeGovernment(this.government);
+    const villageId = chieftan?.villageId || this.villages?.[0]?.id;
+    const government = this.getGovernment(villageId);
 
     const rule = this.normalizeRule({
       ...ruleInput,
@@ -2840,7 +2915,7 @@ class Game {
       active: true
     });
 
-    const duplicate = this.government.rules.find(existing =>
+    const duplicate = government.rules.find(existing =>
       existing.active && existing.effect === rule.effect && existing.category === rule.category
     );
     if (duplicate) {
@@ -2851,11 +2926,15 @@ class Game {
       return duplicate;
     }
 
-    this.government.rules.unshift(rule);
-    this.government.rules = this.government.rules.slice(0, 8);
-    this.government.lastRuleDay = this.timeState.day;
-    this.government.ruleHistory.unshift({ ...rule });
-    this.government.ruleHistory = this.government.ruleHistory.slice(0, 30);
+    government.rules.unshift(rule);
+    government.rules = government.rules.slice(0, 8);
+    government.lastRuleDay = this.timeState.day;
+    if (!government.ruleHistory) government.ruleHistory = [];
+    government.ruleHistory.unshift({ ...rule });
+    government.ruleHistory = government.ruleHistory.slice(0, 30);
+
+    // Keep soft mirror on Game.government for older UI paths
+    this.government = government;
 
     this.applyImmediateRuleEffect(rule);
     this.addChronicleEntry(`${chieftan.name} sets a new fireside rule: "${rule.edict}"`, 'celebration');
@@ -3096,8 +3175,8 @@ Respond with JSON: {
     villager2.partnerId = villager1.id;
     villager2.partnerName = villager1.name;
     villager2.lastPartnershipDay = this.timeState.day;
-    villager1.relationships[villager2.name] = CONSTANTS.RELATIONSHIP.SOULMATE_THRESHOLD;
-    villager2.relationships[villager1.name] = CONSTANTS.RELATIONSHIP.SOULMATE_THRESHOLD;
+    villager1.relationships[villager2.id] = CONSTANTS.RELATIONSHIP.SOULMATE_THRESHOLD;
+    villager2.relationships[villager1.id] = CONSTANTS.RELATIONSHIP.SOULMATE_THRESHOLD;
     villager1.showSpeechBubble('😍', `Joined with ${villager2.name}`, 6000);
     villager2.showSpeechBubble('😍', `Joined with ${villager1.name}`, 6000);
 
@@ -3119,8 +3198,8 @@ Respond with JSON: {
     villager2.affairPartnerId = null;
 
     // Reduce relationship to acquaintance level
-    villager1.relationships[villager2.name] = 10;
-    villager2.relationships[villager1.name] = 10;
+    villager1.relationships[villager2.id] = 10;
+    villager2.relationships[villager1.id] = 10;
 
     // Mood penalties
     villager1.mood = Math.max(-100, villager1.mood - 15);
@@ -3176,11 +3255,11 @@ Respond with JSON: {
     }
 
     // Massive relationship damage between spouse and unfaithful
-    spouse.relationships[unfaithful.name] = Math.max(-100, spouse.relationships[unfaithful.name] - 50);
-    unfaithful.relationships[spouse.name] = Math.max(-100, unfaithful.relationships[spouse.name] - 50);
+    spouse.relationships[unfaithful.id] = Math.max(-100, spouse.getRelationship(unfaithful) - 50);
+    unfaithful.relationships[spouse.id] = Math.max(-100, unfaithful.getRelationship(spouse) - 50);
 
     // Moderate relationship damage with affair partner (jealousy)
-    spouse.relationships[affairPartner.name] = Math.max(-100, (spouse.relationships[affairPartner.name] || 0) - 30);
+    spouse.relationships[affairPartner.id] = Math.max(-100, spouse.getRelationship(affairPartner) - 30);
 
     // Mood penalties
     spouse.mood = Math.max(-100, spouse.mood - 20);
@@ -3289,7 +3368,7 @@ Respond with JSON: {
       if (!affairSecret) continue;
 
       // Discovery triggers
-      const spouseJealousy = (spouse.relationships[affairPartner.name] || 0) < CONSTANTS.RELATIONSHIP.JEALOUSY_THRESHOLD;
+      const spouseJealousy = spouse.getRelationship(affairPartner) < CONSTANTS.RELATIONSHIP.JEALOUSY_THRESHOLD;
       const witnessed = Utils.distance(villager.x, villager.y, spouse.x, spouse.y) < 4;
       const randomChance = Math.random() < 0.05;
 
@@ -3318,8 +3397,8 @@ Respond with JSON: {
       // Social gains
       participants.forEach(other => {
         if (other.id !== v.id) {
-          const current = v.relationships[other.name] || 0;
-          v.relationships[other.name] = Math.min(100, current + ritualDef.socialGain);
+          const current = v.getRelationship(other);
+          v.relationships[other.id] = Math.min(100, current + ritualDef.socialGain);
         }
       });
     });

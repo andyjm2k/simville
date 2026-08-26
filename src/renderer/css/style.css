@@ -79,6 +79,17 @@ body {
   color: var(--text-secondary);
 }
 
+#llm-status {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+#llm-status.offline {
+  color: var(--warning, #e9a825);
+}
+
 .hud-btn {
   width: 32px;
   height: 32px;

@@ -55,7 +55,9 @@ class Village {
     return {
       form: 'chieftain_council',
       rules: [],
-      compliance: 100
+      compliance: 100,
+      lastRuleDay: 0,
+      ruleHistory: []
     };
   }
 
