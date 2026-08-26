@@ -440,6 +440,17 @@ Respond with valid JSON only: {"chronicle":"Your 2-3 sentence chronicle text her
 
     // Include structure positions for context
     const structureContext = worldState.structures?.map(s => `${s.type} at (${s.x}, ${s.y})`).join(', ') || 'none yet';
+    const center = worldState.villageCenter || { x: 32, y: 32 };
+    const rival = worldState.rivalVillage;
+    const rivalBlock = rival ? `
+RIVAL VILLAGE (competitive opponent — outplay them):
+- Name: ${rival.name}
+- Population: ${rival.population}
+- Relation score: ${rival.relation} (-100=war, 0=neutral, +100=allied)
+- At war: ${rival.atWar ? 'YES' : 'no'}
+- Their strength: ${rival.strength}
+- Their resources: ${JSON.stringify(rival.resources)}
+Prioritize actions that strengthen YOUR village vs this rival (food security, builds, coordinated work).` : '';
 
     const prompt = `Generate actions for each villager in this tribal village simulation.
 
@@ -448,7 +459,8 @@ SEASON: ${timeState.season.name} (Day ${timeState.dayInSeason}/${timeState.seaso
 VILLAGE RESOURCES: Wood=${worldState.resources.wood}, Food=${worldState.resources.food}, Water=${worldState.resources.water}, Stone=${worldState.resources.stone}, Herbs=${worldState.resources.herbs}, Clay=${worldState.resources.clay}, Fish=${worldState.resources.fish || 0}, Thatch=${worldState.resources.thatch || 0}, RareMaterials=${worldState.resources.rareMaterials || 0}
 POPULATION: ${villagers.length} villagers
 STRUCTURES: ${structureContext}
-WORLD SIZE: 64x64 tiles, village center is around (32, 32)
+WORLD SIZE: 64x64 tiles, your village center is around (${center.x}, ${center.y})
+${rivalBlock}
 
 VILLAGERS (with current positions):
 ${JSON.stringify(villagerSummaries, null, 2)}
@@ -680,4 +692,5 @@ Output JSON with:
 const llm = new LLMManager();
 if (typeof window !== 'undefined') {
   window.llm = llm;
+  window.LLMManager = LLMManager;
 }
