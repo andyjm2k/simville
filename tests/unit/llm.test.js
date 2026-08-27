@@ -9,7 +9,7 @@ describe('LLMManager', () => {
     manager = new LLMManager();
     manager.config = {
       llm: {
-        endpoint: 'http://127.0.0.1:9999/v1',
+        endpoint: '',
         model: 'test-model',
         apiKey: '',
         maxTokens: 100,
@@ -30,14 +30,31 @@ describe('LLMManager', () => {
     expect(payload.actions).toEqual([]);
   });
 
+  it('parseResponse wraps bare JSON arrays as actions', () => {
+    const payload = manager.parseResponse('[{"villagerId":"v1","action":"idle"}]');
+    expect(payload.actions).toHaveLength(1);
+    expect(payload.actions[0].villagerId).toBe('v1');
+  });
+
   it('parseResponse returns null when no JSON object is present', () => {
     expect(manager.parseResponse('plain text only')).toBeNull();
   });
 
-  it('getFallbackResponse returns idle actions with dialogue', () => {
+  it('getFallbackResponse returns consumer-compatible idle actions', () => {
     const fallback = manager.getFallbackResponse('prompt');
-    expect(fallback.actions[0].type).toBe('idle');
+    expect(fallback.actions[0].action).toBe('idle');
     expect(fallback.dialogue).toContain('villagers');
+  });
+
+  it('getFallbackVillagerActions emits one action per villager', () => {
+    const villagers = [
+      new Villager({ id: 'v1', name: 'Asha' }),
+      new Villager({ id: 'v2', name: 'Ben' })
+    ];
+    const fallback = manager.getFallbackVillagerActions(villagers);
+    expect(fallback.actions).toHaveLength(2);
+    expect(fallback.actions[0].villagerId).toBe('v1');
+    expect(fallback.actions[1].action).toBe('idle');
   });
 
   it('generateFallbackBackstory includes villager name and age', () => {
@@ -47,22 +64,9 @@ describe('LLMManager', () => {
     expect(story).toContain('28');
   });
 
-  it('generate uses fallback when API key is missing', async () => {
+  it('generate uses fallback when endpoint is missing', async () => {
     const result = await manager.generate('Return actions for villagers');
     expect(result.actions).toBeDefined();
-    expect(result.actions[0].type).toBe('idle');
-  });
-});
-
-describe('LLMManager schema gaps', () => {
-  beforeEach(() => {
-    bootstrapCoreModules();
-  });
-
-  it('documents fallback schema mismatch with villager action consumers', () => {
-    const manager = new LLMManager();
-    const fallback = manager.getFallbackResponse('actions');
-    expect(fallback.actions[0].villagerId).toBeUndefined();
-    expect(fallback.actions[0].type).toBeDefined();
+    expect(result.actions[0].action).toBe('idle');
   });
 });

@@ -1,5 +1,6 @@
 /**
  * Loads Simville renderer scripts synchronously for headless testing.
+ * Mirrors src/renderer/index.html script order, including systems/*.
  */
 import fs from 'fs';
 import path from 'path';
@@ -10,18 +11,22 @@ import { installElectronMock } from './mock-electron.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RENDERER_JS = path.resolve(__dirname, '../../src/renderer/js');
 
-const SCRIPT_ORDER = [
+const CORE_SCRIPT_ORDER = [
   'utils.js',
   'constants.js',
   'llm.js',
   'world.js',
   'village.js',
-  'villager.js',
-  'ui.js',
-  'game.js'
+  'villager.js'
 ];
 
-const CORE_SCRIPT_ORDER = SCRIPT_ORDER.slice(0, 6);
+const SYSTEM_SCRIPT_ORDER = [
+  'systems/economy.js',
+  'systems/raid.js',
+  'systems/diplomacy.js',
+  'systems/baseline-agent.js',
+  'systems/benchmark.js'
+];
 
 const SCRIPT_EXPORTS = {
   'utils.js': ['Utils'],
@@ -31,6 +36,11 @@ const SCRIPT_EXPORTS = {
   'village.js': ['Village'],
   'villager.js': ['Villager', 'VillagerRenderer'],
   'ui.js': ['UIManager'],
+  'systems/economy.js': ['Economy'],
+  'systems/raid.js': ['RaidSystem'],
+  'systems/diplomacy.js': ['DiplomacySystem'],
+  'systems/baseline-agent.js': ['BaselineAgent'],
+  'systems/benchmark.js': ['BenchmarkScorer', 'BenchmarkRunner'],
   'game.js': ['Game', 'game']
 };
 
@@ -42,6 +52,12 @@ const GLOBAL_EXPORTS = [
   'Village',
   'Villager',
   'UIManager',
+  'Economy',
+  'RaidSystem',
+  'DiplomacySystem',
+  'BaselineAgent',
+  'BenchmarkScorer',
+  'BenchmarkRunner',
   'Game',
   'WorldRenderer',
   'VillagerRenderer',
@@ -50,7 +66,7 @@ const GLOBAL_EXPORTS = [
 ];
 
 let scriptsLoaded = false;
-let loadedScope = { core: false, ui: false, game: false };
+let loadedScope = { core: false, ui: false, systems: false, game: false };
 let scriptContext = null;
 
 function createScriptContext() {
@@ -120,9 +136,17 @@ function syncGlobalsFromContext(context) {
 }
 
 export function loadRendererScripts(options = {}) {
-  const { includeGame = false, includeUi = false, force = false } = options;
+  const { includeGame = false, includeUi = false, includeSystems = false, force = false } = options;
+  const needSystems = includeSystems || includeGame;
 
-  if (!force && scriptsLoaded && loadedScope.core && (!includeGame || loadedScope.game)) {
+  if (
+    !force &&
+    scriptsLoaded &&
+    loadedScope.core &&
+    (!includeUi || loadedScope.ui) &&
+    (!needSystems || loadedScope.systems) &&
+    (!includeGame || loadedScope.game)
+  ) {
     syncGlobalsFromContext(scriptContext);
     return scriptContext;
   }
@@ -130,7 +154,7 @@ export function loadRendererScripts(options = {}) {
   if (force || !scriptContext) {
     scriptContext = createScriptContext();
     installElectronMock();
-    loadedScope = { core: false, ui: false, game: false };
+    loadedScope = { core: false, ui: false, systems: false, game: false };
   }
 
   if (force || !loadedScope.core) {
@@ -143,6 +167,13 @@ export function loadRendererScripts(options = {}) {
   if ((includeUi || includeGame) && (force || !loadedScope.ui)) {
     runScript(scriptContext, 'ui.js');
     loadedScope.ui = true;
+  }
+
+  if (needSystems && (force || !loadedScope.systems)) {
+    for (const script of SYSTEM_SCRIPT_ORDER) {
+      runScript(scriptContext, script);
+    }
+    loadedScope.systems = true;
   }
 
   if (includeGame && (force || !loadedScope.game)) {
@@ -269,18 +300,17 @@ export function createHeadlessGame(seed = 424242) {
   gameInstance.ui.initialize();
   gameInstance.timeState.dayDuration = 600000;
   gameInstance.timeState.hourDuration = gameInstance.timeState.dayDuration / 24;
-  gameInstance.resources = gameInstance.getDefaultResources();
 
   return gameInstance;
 }
 
 export function bootstrapCoreModules() {
-  loadRendererScripts({ includeGame: false });
+  loadRendererScripts({ includeGame: false, includeSystems: true });
 }
 
 export function resetRendererModules() {
   scriptsLoaded = false;
-  loadedScope = { core: false, ui: false, game: false };
+  loadedScope = { core: false, ui: false, systems: false, game: false };
   scriptContext = null;
   for (const key of GLOBAL_EXPORTS) {
     delete globalThis[key];

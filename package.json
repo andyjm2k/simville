@@ -6,14 +6,14 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --enable-logging",
-    "test": "node tests/run-unit-tests.js",
     "benchmark": "node scripts/run-benchmark.js",
     "build": "electron-builder --win",
     "build:dir": "electron-builder --win --dir",
-    "test": "vitest run",
+    "test": "vitest run && node tests/run-unit-tests.js",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
     "test:qa": "vitest run tests/qa",
+    "test:systems": "node tests/run-unit-tests.js",
     "test:regression": "node tests/qa/harness.mjs --regression",
     "test:coverage": "vitest run --coverage",
     "test:suite": "node tests/qa/harness.mjs --suite"

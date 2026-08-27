@@ -75,15 +75,15 @@ describe('Utils', () => {
   });
 });
 
-describe('Utils known gaps', () => {
+describe('Utils seeded RNG', () => {
   beforeEach(() => {
     bootstrapCoreModules();
   });
 
-  it('documents that randomInt still uses Math.random instead of seededRandom', () => {
+  it('advances the seed when randomInt is called', () => {
     Utils.setSeed(42);
     const seededSnapshot = Utils.seed;
     Utils.randomInt(1, 1000);
-    expect(Utils.seed).toBe(seededSnapshot);
+    expect(Utils.seed).not.toBe(seededSnapshot);
   });
 });

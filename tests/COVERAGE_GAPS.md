@@ -7,6 +7,7 @@ End-to-end review of the Simville codebase against the new Vitest + headless QA 
 | Layer | Location | Runner | Purpose |
 |-------|----------|--------|---------|
 | Unit tests | `tests/unit/` | Vitest + jsdom | Pure logic and class methods |
+| Systems unit | `tests/run-unit-tests.js` | Node VM harness | Economy / Raid / Diplomacy / Benchmark |
 | QA / functional | `tests/qa/` | Vitest + headless game harness | Component integration without Electron display |
 | QA CLI | `tests/qa/harness.mjs` | Node wrapper | Target individual suites in cloud/CI |
 | CI | `.github/workflows/test.yml` | GitHub Actions | Regression gate on push/PR |
@@ -14,9 +15,10 @@ End-to-end review of the Simville codebase against the new Vitest + headless QA 
 ### Commands
 
 ```bash
-npm test                    # Full unit + QA suite
-npm run test:unit           # Unit tests only
+npm test                    # Vitest unit+QA, then systems unit tests
+npm run test:unit           # Vitest unit tests only
 npm run test:qa             # QA functional tests only
+npm run test:systems        # Economy/Raid/Diplomacy Node harness
 npm run test:regression     # QA harness regression mode
 npm run test:coverage       # Coverage report (renderer JS)
 node tests/qa/harness.mjs --list

@@ -17,19 +17,23 @@ describe('QA: village assignment', () => {
     expect(game.villages).toHaveLength(2);
   });
 
-  it('ensures each village has a chieftan after assignment logic runs', () => {
-    const chieftans = game.villagers.filter((v) => v.isChieftan);
-    expect(chieftans.length).toBeGreaterThanOrEqual(2);
+  it('assigns every villager to a village', () => {
+    const unassigned = game.villagers.filter((v) => !v.villageId);
+    expect(unassigned).toHaveLength(0);
 
-    const villagesWithChieftan = game.villages.filter((village) =>
-      village.getChieftan(game.villagers)
+    const assignedCount = game.villages.reduce(
+      (sum, village) => sum + village.villagerIds.length,
+      0
     );
-    expect(villagesWithChieftan).toHaveLength(2);
+    expect(assignedCount).toBe(game.villagers.length);
   });
 
-  it('characterizes the known gap where high-index villagers may remain unassigned', () => {
-    const unassigned = game.villagers.filter((v) => !v.villageId);
-    expect(unassigned.length).toBeGreaterThan(0);
-    expect(unassigned.some((v, idx) => game.villagers.indexOf(v) >= 6)).toBe(true);
+  it('ensures each village has exactly one chieftan', () => {
+    game.villages.forEach((village) => {
+      const chieftans = game
+        .getVillagersForVillage(village.id)
+        .filter((v) => v.isChieftan);
+      expect(chieftans).toHaveLength(1);
+    });
   });
 });

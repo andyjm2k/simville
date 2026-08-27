@@ -25,7 +25,9 @@ describe('QA: raid state machine', () => {
       phase: 'attacking',
       planningTimer: 0,
       travelTimer: 0,
-      retreatTimer: 0
+      retreatTimer: 0,
+      loot: null,
+      combatResolved: false
     };
 
     vi.spyOn(Math, 'random').mockReturnValue(0.99);
@@ -35,8 +37,8 @@ describe('QA: raid state machine', () => {
   it('advances raids from planning to moving to attacking', () => {
     const attacker = game.villages[0];
     const defender = game.villages[1];
-    game.startRaid(attacker.id, defender.id);
-
+    const started = game.startRaid(attacker.id, defender.id);
+    expect(started).toBe(true);
     expect(game.activeRaid.phase).toBe('planning');
 
     game.processRaid(game.timeState.dayDuration * 2);
@@ -50,22 +52,24 @@ describe('QA: raid state machine', () => {
 
     game.activeRaid.phase = 'retreating';
     game.activeRaid.retreatTimer = 0;
+    game.activeRaid.attackerWon = true;
     game.processRaid(game.timeState.dayDuration * 2);
 
     expect(game.activeRaid).toBeNull();
   });
 
-  it('characterizes failed raids that remain stuck in attacking phase', () => {
+  it('exits attacking into retreating after a failed combat resolution', () => {
     forceFailedRaid();
-    const defender = game.villages[1];
-    const phaseBefore = game.activeRaid.phase;
 
     game.processRaid(1000);
-    game.processRaid(1000);
 
-    expect(phaseBefore).toBe('attacking');
     expect(game.activeRaid).not.toBeNull();
-    expect(game.activeRaid.phase).toBe('attacking');
+    expect(game.activeRaid.combatResolved).toBe(true);
+    expect(game.activeRaid.phase).toBe('retreating');
+    expect(game.activeRaid.attackerWon).toBe(false);
+
+    game.processRaid(game.timeState.dayDuration * 2);
+    expect(game.activeRaid).toBeNull();
 
     vi.restoreAllMocks();
   });
