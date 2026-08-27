@@ -6,6 +6,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --enable-logging",
+    "test": "node tests/run-unit-tests.js",
+    "benchmark": "node scripts/run-benchmark.js",
     "build": "electron-builder --win",
     "build:dir": "electron-builder --win --dir",
     "test": "vitest run",

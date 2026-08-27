@@ -4,6 +4,8 @@
 **Stack:** Electron 28 + vanilla JS (Canvas) + OpenAI-compatible LLM  
 **Primary hotspot:** `src/renderer/js/game.js` (~4115 lines, god object)
 
+**Execution status (branch `cursor/execute-refactor-plan-dc17`):** Phases 0–5 implemented. Unit tests via `npm test` cover Economy, RaidSystem, DiplomacySystem, and seeded Utils.
+
 This document identifies **implemented features that should be refactored** because they are not fit for purpose, not optimized, or not fully implemented. It is ordered by severity and proposed work phases.
 
 ---

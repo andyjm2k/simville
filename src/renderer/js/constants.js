@@ -179,6 +179,24 @@ const CONSTANTS = {
       moodBoost: 20,
       socialGain: 15,
       emoji: '💒'
+    },
+    PRAYER_FOR_RAIN: {
+      name: 'Prayer for Rain',
+      time: 'deep_dry',
+      participants: 'all',
+      duration: 12,
+      moodBoost: 8,
+      socialGain: 4,
+      emoji: '🌧️'
+    },
+    SPIRIT_COMMUNION: {
+      name: 'Spirit Communion',
+      time: 'night',
+      participants: 'adults',
+      duration: 15,
+      moodBoost: 12,
+      socialGain: 6,
+      emoji: '👻'
     }
   },
 
@@ -496,7 +514,7 @@ const CONSTANTS = {
   VILLAGE: {
     DEFAULT_RADIUS: 12,
     MIN_DISTANCE_BETWEEN: 30,
-    STARTING_VILLAGERS: 3,
+    STARTING_VILLAGERS: 5,
     NAME_PREFIXES: ['Elder', 'Storm', 'River', 'Stone', 'Iron', 'Golden', 'Shadow', 'Wind', 'Thunder', 'Dawn', 'Mist', 'Ember'],
     NAME_SUFFIXES: ['vale', 'hollow', 'fall', 'peak', 'ridge', 'glen', 'mere', 'fell', 'brook', 'watch', 'haven', 'crest']
   },
@@ -544,4 +562,5 @@ Object.freeze(CONSTANTS.BIOME_ICON);
 Object.freeze(CONSTANTS.INTERACTION);
 Object.freeze(CONSTANTS.VILLAGE_RELATION);
 Object.freeze(CONSTANTS.WAR);
+Object.freeze(CONSTANTS.DIPLOMACY);
 Object.freeze(CONSTANTS.VILLAGE);

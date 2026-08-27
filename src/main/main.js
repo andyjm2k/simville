@@ -4,14 +4,13 @@ const fs = require('fs');
 const log = require('electron-log');
 const Store = require('electron-store');
 
-// Set up permissive CSP for local development
-app.commandLine.appendSwitch('disable-web-security');
-app.commandLine.appendSwitch('allow-insecure-localhost');
-
 // Configure logging
 log.transports.file.level = 'info';
 log.transports.file.maxSize = 10 * 1024 * 1024; // 10MB
 log.transports.console.level = false;
+
+const ALLOWED_CONFIG_KEYS = new Set(['llm', 'simulation', 'graphics', 'audio', 'window']);
+const MAX_AUTOSAVES = 5;
 
 // Initialize store for config
 const store = new Store({
@@ -53,6 +52,82 @@ let mainWindow;
 
 log.info('Simville starting...');
 
+function isAllowedLlmEndpoint(endpoint) {
+  if (!endpoint || typeof endpoint !== 'string') {
+    return { ok: false, error: 'Invalid endpoint' };
+  }
+
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return { ok: false, error: 'Invalid endpoint URL' };
+  }
+
+  const scheme = url.protocol.toLowerCase();
+  if (scheme !== 'http:' && scheme !== 'https:') {
+    return { ok: false, error: 'Only http and https endpoints are allowed' };
+  }
+
+  // Reject dangerous schemes if somehow present in nested forms
+  const lower = endpoint.toLowerCase();
+  if (lower.startsWith('file:') || lower.startsWith('javascript:') || lower.startsWith('data:')) {
+    return { ok: false, error: 'Disallowed endpoint scheme' };
+  }
+
+  const hostname = (url.hostname || '').toLowerCase();
+  if (!hostname) {
+    return { ok: false, error: 'Missing hostname' };
+  }
+
+  // Allow localhost / 127.0.0.1 for local LLM servers
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return { ok: true };
+  }
+
+  // Reject bare private IPs (basic SSRF guard); hostname names are allowed
+  const ipv4 = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4) {
+    const a = Number(ipv4[1]);
+    const b = Number(ipv4[2]);
+    if (a === 10) {
+      return { ok: false, error: 'Private IP endpoints are not allowed' };
+    }
+    if (a === 192 && b === 168) {
+      return { ok: false, error: 'Private IP endpoints are not allowed' };
+    }
+    if (a === 127) {
+      return { ok: false, error: 'Use localhost or 127.0.0.1 for local models' };
+    }
+  }
+
+  return { ok: true };
+}
+
+function rotateAutosaves(savesDir, justSavedFilename) {
+  if (!justSavedFilename || !String(justSavedFilename).startsWith('save_')) {
+    return;
+  }
+
+  try {
+    const autosaves = fs.readdirSync(savesDir)
+      .filter(f => f.startsWith('save_') && f.endsWith('.json'))
+      .map(f => ({
+        filename: f,
+        mtime: fs.statSync(path.join(savesDir, f)).mtime.getTime()
+      }))
+      .sort((a, b) => b.mtime - a.mtime);
+
+    const toDelete = autosaves.slice(MAX_AUTOSAVES);
+    for (const old of toDelete) {
+      fs.unlinkSync(path.join(savesDir, old.filename));
+      log.info(`Rotated old autosave: ${old.filename}`);
+    }
+  } catch (error) {
+    log.error('Autosave rotation failed:', error);
+  }
+}
+
 function createWindow() {
   const windowConfig = store.get('window');
 
@@ -67,7 +142,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
-      webSecurity: false
+      webSecurity: true
     },
     show: false
   });
@@ -189,7 +264,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'About Simville',
-              message: 'Simville v1.0.0',
+              message: 'Simville v1.1.0',
               detail: 'An LLM-driven tribal village life simulation.\n\nBuild your village, guide your people, and create legends that will be remembered for generations.'
             });
           }
@@ -209,8 +284,12 @@ ipcMain.handle('config:get', (event, key) => {
   return store.get(key);
 });
 
-// Set config
+// Set config — only allow known top-level keys
 ipcMain.handle('config:set', (event, key, value) => {
+  if (!ALLOWED_CONFIG_KEYS.has(key)) {
+    log.warn(`Rejected config:set for disallowed key: ${key}`);
+    return false;
+  }
   store.set(key, value);
   return true;
 });
@@ -223,6 +302,11 @@ ipcMain.handle('config:getAll', () => {
 // Test LLM connection
 ipcMain.handle('llm:test-connection', async (event, config) => {
   try {
+    const allow = isAllowedLlmEndpoint(config?.endpoint);
+    if (!allow.ok) {
+      return { success: false, error: allow.error };
+    }
+
     const response = await fetch(`${config.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -260,6 +344,7 @@ ipcMain.handle('game:save', async (event, saveData) => {
     const filename = `save_${Date.now()}.json`;
     const filepath = path.join(savesDir, filename);
     fs.writeFileSync(filepath, JSON.stringify(saveData, null, 2));
+    rotateAutosaves(savesDir, filename);
     log.info(`Game saved: ${filename}`);
     return { success: true, filename };
   } catch (error) {
@@ -268,15 +353,20 @@ ipcMain.handle('game:save', async (event, saveData) => {
   }
 });
 
-// Load game
+// Load game — path-safe (basename + resolve under savesDir)
 ipcMain.handle('game:load', async (event, filename) => {
   try {
-    const filepath = path.join(app.getPath('userData'), 'saves', filename);
+    const safeName = path.basename(String(filename || ''));
+    const savesDir = path.join(app.getPath('userData'), 'saves');
+    const filepath = path.join(savesDir, safeName);
+    if (!filepath.startsWith(savesDir + path.sep)) {
+      return { success: false, error: 'Invalid save path' };
+    }
     if (!fs.existsSync(filepath)) {
       return { success: false, error: 'Save file not found' };
     }
     const data = fs.readFileSync(filepath, 'utf-8');
-    log.info(`Game loaded: ${filename}`);
+    log.info(`Game loaded: ${safeName}`);
     return { success: true, data: JSON.parse(data) };
   } catch (error) {
     log.error('Load failed:', error);
@@ -307,16 +397,27 @@ ipcMain.handle('game:list-saves', async () => {
 
 // Show save dialog
 ipcMain.handle('dialog:show-save', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile'],
+  const result = await dialog.showSaveDialog(mainWindow, {
     filters: [{ name: 'Simville Saves', extensions: ['json'] }],
-    defaultPath: path.join(app.getPath('userData'), 'saves')
+    defaultPath: path.join(app.getPath('userData'), 'saves', 'save.json')
   });
   return result;
 });
 
 // App lifecycle
 app.whenReady().then(() => {
+  // CSP for file:// / loadFile renderer
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*"
+        ]
+      }
+    });
+  });
+
   createWindow();
   log.info('Simville initialized');
 });

@@ -1,5 +1,29 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Channels the renderer may clear via removeAllListeners
+const ALLOWED_REMOVE_CHANNELS = new Set([
+  'menu:new-world',
+  'menu:save',
+  'menu:load',
+  'menu:settings',
+  'menu:toggle-pause',
+  'menu:speed',
+  'menu:chronicle',
+  'menu:villagers',
+  'menu:toggle-labels',
+  'menu:toggle-bubbles'
+]);
+
+/**
+ * Register a menu listener and return an unsubscribe function.
+ * Prefer a single register per channel; call unsubscribe before re-registering.
+ */
+function onMenu(channel, callback) {
+  const handler = (_event, ...args) => callback(...args);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+}
+
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -19,18 +43,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Dialogs
   showSaveDialog: () => ipcRenderer.invoke('dialog:show-save'),
 
-  // Menu events
-  onMenuNewWorld: (callback) => ipcRenderer.on('menu:new-world', callback),
-  onMenuSave: (callback) => ipcRenderer.on('menu:save', callback),
-  onMenuLoad: (callback) => ipcRenderer.on('menu:load', callback),
-  onMenuSettings: (callback) => ipcRenderer.on('menu:settings', callback),
-  onMenuTogglePause: (callback) => ipcRenderer.on('menu:toggle-pause', callback),
-  onMenuSpeed: (callback) => ipcRenderer.on('menu:speed', (event, speed) => callback(speed)),
-  onMenuChronicle: (callback) => ipcRenderer.on('menu:chronicle', callback),
-  onMenuVillagers: (callback) => ipcRenderer.on('menu:villagers', callback),
-  onMenuToggleLabels: (callback) => ipcRenderer.on('menu:toggle-labels', callback),
-  onMenuToggleBubbles: (callback) => ipcRenderer.on('menu:toggle-bubbles', callback),
+  // Menu events (each returns unsubscribe; prefer single register per channel)
+  onMenuNewWorld: (callback) => onMenu('menu:new-world', callback),
+  onMenuSave: (callback) => onMenu('menu:save', callback),
+  onMenuLoad: (callback) => onMenu('menu:load', callback),
+  onMenuSettings: (callback) => onMenu('menu:settings', callback),
+  onMenuTogglePause: (callback) => onMenu('menu:toggle-pause', callback),
+  onMenuSpeed: (callback) => onMenu('menu:speed', (speed) => callback(speed)),
+  onMenuChronicle: (callback) => onMenu('menu:chronicle', callback),
+  onMenuVillagers: (callback) => onMenu('menu:villagers', callback),
+  onMenuToggleLabels: (callback) => onMenu('menu:toggle-labels', callback),
+  onMenuToggleBubbles: (callback) => onMenu('menu:toggle-bubbles', callback),
 
-  // Remove listeners
-  removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)
+  // Remove listeners — whitelisted channels only
+  removeAllListeners: (channel) => {
+    if (!ALLOWED_REMOVE_CHANNELS.has(channel)) {
+      return;
+    }
+    ipcRenderer.removeAllListeners(channel);
+  }
 });
