@@ -57,7 +57,28 @@ Reports include daily snapshots, per-agent LLM latency/failure stats, and diplom
 
 - `src/renderer/js/systems/benchmark.js` — runner + scorer
 - `src/renderer/js/systems/baseline-agent.js` — heuristic opponent
+- `src/renderer/js/systems/batch-runner.js` — batch execution & parameter sweeps
+- `src/renderer/js/systems/progress-monitor.js` — progress tracking & observability
+- `src/renderer/js/systems/failure-handler.js` — retry logic & error handling
 - `scripts/run-benchmark.js` — CLI (Node, no Electron UI)
 - `Game.initializeHeadless()` + `runHeadlessTick()` — simulation without rendering
 
 Rival village context is injected into LLM prompts so decisions are explicitly competitive.
+
+## Advanced Features
+
+For batch execution, parameter sweeps, parallel workers, monitoring, and failure handling, see:
+
+**[BENCHMARK-ADVANCED.md](./BENCHMARK-ADVANCED.md)** — Full operational features guide
+
+Quick examples:
+```bash
+# Batch execution with 4 parallel workers
+npm run benchmark -- --batch batch-benchmark.example.json --parallel 4
+
+# Parameter sweep with replicates
+npm run benchmark -- --sweep sweep-benchmark.example.json --parallel 4 --verbose
+
+# Resume from checkpoint
+npm run benchmark -- --batch config.json --resume --checkpoint my-checkpoint.json
+```
