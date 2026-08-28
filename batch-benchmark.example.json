@@ -1,0 +1,66 @@
+{
+  "output": "batch-report.json",
+  "description": "Example batch benchmark configuration",
+  "runs": [
+    {
+      "seed": 1001,
+      "days": 15,
+      "dayLengthMs": 30000,
+      "tickIntervalMs": 5000,
+      "output": "results/run-1001.json",
+      "agentA": {
+        "type": "llm",
+        "name": "gpt-4o-mini-temp-0.2",
+        "endpoint": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "apiKey": "YOUR_API_KEY",
+        "temperature": 0.2,
+        "maxTokens": 500
+      },
+      "agentB": {
+        "type": "baseline",
+        "name": "heuristic-opponent"
+      }
+    },
+    {
+      "seed": 1002,
+      "days": 15,
+      "dayLengthMs": 30000,
+      "tickIntervalMs": 5000,
+      "output": "results/run-1002.json",
+      "agentA": {
+        "type": "llm",
+        "name": "gpt-4o-mini-temp-0.8",
+        "endpoint": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "apiKey": "YOUR_API_KEY",
+        "temperature": 0.8,
+        "maxTokens": 500
+      },
+      "agentB": {
+        "type": "baseline",
+        "name": "heuristic-opponent"
+      }
+    },
+    {
+      "seed": 1003,
+      "days": 15,
+      "dayLengthMs": 30000,
+      "tickIntervalMs": 5000,
+      "output": "results/run-1003.json",
+      "agentA": {
+        "type": "llm",
+        "name": "gpt-4o-temp-0.4",
+        "endpoint": "https://api.openai.com/v1",
+        "model": "gpt-4o",
+        "apiKey": "YOUR_API_KEY",
+        "temperature": 0.4,
+        "maxTokens": 500
+      },
+      "agentB": {
+        "type": "baseline",
+        "name": "heuristic-opponent"
+      }
+    }
+  ]
+}

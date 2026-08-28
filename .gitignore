@@ -3,4 +3,11 @@ dist/
 coverage/
 *.log
 .DS_Store
+
+# Benchmark outputs
 benchmark-report.json
+batch-report.json
+sweep-report.json
+*-checkpoint.json
+*.ckpt
+results/
