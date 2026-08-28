@@ -31,7 +31,12 @@ function parseArgs(argv) {
     verbose: false,
     silent: false,
     checkpoint: 'batch-checkpoint.json',
-    resumeCheckpoint: false
+    resumeCheckpoint: false,
+    reportFormat: null, // html, markdown, csv
+    reportOutput: null,
+    generateCharts: false,
+    compareRuns: false,
+    showTerminalCharts: false
   };
 
   const singleRunConfig = {
@@ -76,6 +81,16 @@ function parseArgs(argv) {
       options.verbose = true;
     } else if (arg === '--silent' || arg === '-s') {
       options.silent = true;
+    } else if (arg === '--report-format' && argv[i + 1]) {
+      options.reportFormat = argv[++i];
+    } else if (arg === '--report-output' && argv[i + 1]) {
+      options.reportOutput = argv[++i];
+    } else if (arg === '--charts') {
+      options.generateCharts = true;
+    } else if (arg === '--terminal-charts') {
+      options.showTerminalCharts = true;
+    } else if (arg === '--compare') {
+      options.compareRuns = true;
     } else if (arg === '--help' || arg === '-h') {
       console.log(`Simville benchmark runner
 
@@ -100,6 +115,13 @@ Options:
   --silent, -s          Minimal output
   --help, -h            Show this help
 
+Report Options:
+  --report-format <fmt> Generate report (html, markdown, csv)
+  --report-output <file> Report output path
+  --charts              Generate charts in HTML reports
+  --terminal-charts     Show ASCII charts in terminal
+  --compare             Generate comparison analysis (batch/sweep only)
+
 Env: SIMVILLE_LLM_ENDPOINT, SIMVILLE_LLM_MODEL, SIMVILLE_LLM_API_KEY`);
       process.exit(0);
     }
@@ -113,6 +135,54 @@ Env: SIMVILLE_LLM_ENDPOINT, SIMVILLE_LLM_MODEL, SIMVILLE_LLM_API_KEY`);
   }
 
   return { options, singleRunConfig };
+}
+
+function generateAdditionalReports(result, options, ReportGenerator) {
+  const format = options.reportFormat.toLowerCase();
+  const outputPath = options.reportOutput || `benchmark-report.${format === 'html' ? 'html' : format === 'csv' ? 'csv' : 'md'}`;
+
+  try {
+    const reportOptions = {
+      includeCharts: options.generateCharts
+    };
+
+    const report = ReportGenerator.generate(result, format, reportOptions);
+    
+    if (format === 'csv') {
+      // Generate multiple CSV files
+      if (typeof report === 'object') {
+        const base = outputPath.replace('.csv', '');
+        fs.writeFileSync(`${base}-daily.csv`, report.daily);
+        fs.writeFileSync(`${base}-final.csv`, report.final);
+        if (report.events) fs.writeFileSync(`${base}-events.csv`, report.events);
+        console.error(`CSV reports generated: ${base}-*.csv`);
+      } else {
+        fs.writeFileSync(outputPath, report);
+        console.error(`CSV report: ${outputPath}`);
+      }
+    } else {
+      fs.writeFileSync(outputPath, report);
+      console.error(`${format.toUpperCase()} report: ${outputPath}`);
+    }
+  } catch (err) {
+    console.error(`Failed to generate ${format} report:`, err.message);
+  }
+}
+
+function showTerminalCharts(result, BenchmarkVisualizer) {
+  try {
+    const charts = BenchmarkVisualizer.generateTerminalCharts(result, { width: 70, height: 15 });
+    
+    if (charts.scoreChart) {
+      console.error('\n' + charts.scoreChart);
+    }
+    
+    if (charts.finalComparison) {
+      console.error('\n' + charts.finalComparison);
+    }
+  } catch (err) {
+    console.error('Failed to generate terminal charts:', err.message);
+  }
 }
 
 function loadScript(relPath, sandbox) {
@@ -141,6 +211,14 @@ function loadScript(relPath, sandbox) {
 ;if (typeof FailureHandler !== 'undefined') globalThis.FailureHandler = FailureHandler;
 ;if (typeof ResilientBenchmarkRunner !== 'undefined') globalThis.ResilientBenchmarkRunner = ResilientBenchmarkRunner;
 ;if (typeof GracefulDegradation !== 'undefined') globalThis.GracefulDegradation = GracefulDegradation;
+;if (typeof ReportGenerator !== 'undefined') globalThis.ReportGenerator = ReportGenerator;
+;if (typeof HTMLReportGenerator !== 'undefined') globalThis.HTMLReportGenerator = HTMLReportGenerator;
+;if (typeof MarkdownReportGenerator !== 'undefined') globalThis.MarkdownReportGenerator = MarkdownReportGenerator;
+;if (typeof CSVReportGenerator !== 'undefined') globalThis.CSVReportGenerator = CSVReportGenerator;
+;if (typeof BenchmarkComparator !== 'undefined') globalThis.BenchmarkComparator = BenchmarkComparator;
+;if (typeof BatchAnalyzer !== 'undefined') globalThis.BatchAnalyzer = BatchAnalyzer;
+;if (typeof BenchmarkVisualizer !== 'undefined') globalThis.BenchmarkVisualizer = BenchmarkVisualizer;
+;if (typeof HeatmapGenerator !== 'undefined') globalThis.HeatmapGenerator = HeatmapGenerator;
 ;if (typeof Game !== 'undefined') globalThis.Game = Game;
 ;if (typeof module !== 'undefined' && module.exports) {
   const exported = module.exports;
@@ -223,6 +301,18 @@ async function runSingle(config, options, sandbox) {
     console.error(`Report: ${outPath}`);
   }
 
+  // Generate additional report formats
+  if (options.reportFormat) {
+    const { ReportGenerator } = sandbox;
+    generateAdditionalReports(report, options, ReportGenerator);
+  }
+
+  // Show terminal charts
+  if (options.showTerminalCharts && !options.silent) {
+    const { BenchmarkVisualizer } = sandbox;
+    showTerminalCharts(report, BenchmarkVisualizer);
+  }
+
   return report;
 }
 
@@ -269,6 +359,28 @@ async function runBatch(batchConfig, options, sandbox) {
 
   if (!options.silent) {
     console.error(`Batch report: ${outPath}`);
+  }
+
+  // Generate comparison analysis
+  if (options.compareRuns) {
+    const { BatchAnalyzer } = sandbox;
+    const analysisPath = path.resolve(batchConfig.analysisOutput || 'batch-analysis.json');
+    const analysis = BatchAnalyzer.analyze(summary, { groupBy: batchConfig.groupBy });
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis, null, 2));
+    
+    if (!options.silent) {
+      console.error(`Analysis report: ${analysisPath}`);
+    }
+
+    // Generate markdown analysis report
+    if (options.reportFormat === 'markdown' || options.reportFormat === 'md') {
+      const mdPath = analysisPath.replace('.json', '.md');
+      const mdReport = BatchAnalyzer.generateReport(summary, 'markdown');
+      fs.writeFileSync(mdPath, mdReport);
+      if (!options.silent) {
+        console.error(`Markdown analysis: ${mdPath}`);
+      }
+    }
   }
 
   return summary;
@@ -332,6 +444,30 @@ async function runSweep(sweepConfig, options, sandbox) {
     console.error(`Sweep report: ${outPath}`);
   }
 
+  // Generate comparison analysis for sweep
+  if (options.compareRuns) {
+    const { BatchAnalyzer } = sandbox;
+    const analysisPath = path.resolve(sweepConfig.analysisOutput || 'sweep-analysis.json');
+    const analysis = BatchAnalyzer.analyze(summary, { 
+      groupBy: sweepConfig.groupBy || 'metadata.sweep' 
+    });
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis, null, 2));
+    
+    if (!options.silent) {
+      console.error(`Analysis report: ${analysisPath}`);
+    }
+
+    // Generate markdown analysis report
+    if (options.reportFormat === 'markdown' || options.reportFormat === 'md') {
+      const mdPath = analysisPath.replace('.json', '.md');
+      const mdReport = BatchAnalyzer.generateReport(summary, 'markdown');
+      fs.writeFileSync(mdPath, mdReport);
+      if (!options.silent) {
+        console.error(`Markdown analysis: ${mdPath}`);
+      }
+    }
+  }
+
   return report;
 }
 
@@ -354,6 +490,9 @@ async function main() {
     'src/renderer/js/systems/batch-runner.js',
     'src/renderer/js/systems/progress-monitor.js',
     'src/renderer/js/systems/failure-handler.js',
+    'src/renderer/js/systems/report-generator.js',
+    'src/renderer/js/systems/benchmark-analysis.js',
+    'src/renderer/js/systems/visualizer.js',
     'src/renderer/js/game.js'
   ];
 
