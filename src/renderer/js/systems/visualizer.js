@@ -233,10 +233,11 @@ class BenchmarkVisualizer {
    */
   static renderASCIILineChart(chartData, options = {}) {
     if (chartData.error) return chartData.error;
+    if (!chartData.data || !chartData.data.datasets) return 'No chart data available';
 
     const width = options.width || 60;
     const height = options.height || 15;
-    const { data } = chartData.data;
+    const { data } = chartData;
 
     if (!data.datasets || data.datasets.length === 0) {
       return 'No data to display';
