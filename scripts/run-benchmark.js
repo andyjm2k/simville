@@ -128,6 +128,16 @@ Report Options:
   --metrics             Alias for --advanced-metrics
 
 Env: SIMVILLE_LLM_ENDPOINT, SIMVILLE_LLM_MODEL, SIMVILLE_LLM_API_KEY`);
+<<<<<<< HEAD
+  --advanced-metrics    Compute advanced performance metrics
+  --metrics             Alias for --advanced-metrics
+
+=======
+
+=======
+>>>>>>> origin/main
+>>>>>>> origin/main
+Env: SIMVILLE_LLM_ENDPOINT, SIMVILLE_LLM_MODEL, SIMVILLE_LLM_API_KEY`);
       process.exit(0);
     }
   }
@@ -140,6 +150,57 @@ Env: SIMVILLE_LLM_ENDPOINT, SIMVILLE_LLM_MODEL, SIMVILLE_LLM_API_KEY`);
   }
 
   return { options, singleRunConfig };
+<<<<<<< HEAD
+}
+
+function generateAdditionalReports(result, options, ReportGenerator) {
+  const format = options.reportFormat.toLowerCase();
+  const outputPath = options.reportOutput || `benchmark-report.${format === 'html' ? 'html' : format === 'csv' ? 'csv' : 'md'}`;
+
+  try {
+    const reportOptions = {
+      includeCharts: options.generateCharts
+    };
+
+    const report = ReportGenerator.generate(result, format, reportOptions);
+    
+    if (format === 'csv') {
+      // Generate multiple CSV files
+      if (typeof report === 'object') {
+        const base = outputPath.replace('.csv', '');
+        fs.writeFileSync(`${base}-daily.csv`, report.daily);
+        fs.writeFileSync(`${base}-final.csv`, report.final);
+        if (report.events) fs.writeFileSync(`${base}-events.csv`, report.events);
+        console.error(`CSV reports generated: ${base}-*.csv`);
+      } else {
+        fs.writeFileSync(outputPath, report);
+        console.error(`CSV report: ${outputPath}`);
+      }
+    } else {
+      fs.writeFileSync(outputPath, report);
+      console.error(`${format.toUpperCase()} report: ${outputPath}`);
+    }
+  } catch (err) {
+    console.error(`Failed to generate ${format} report:`, err.message);
+  }
+}
+
+function showTerminalCharts(result, BenchmarkVisualizer) {
+  try {
+    const charts = BenchmarkVisualizer.generateTerminalCharts(result, { width: 70, height: 15 });
+    
+    if (charts.scoreChart) {
+      console.error('\n' + charts.scoreChart);
+    }
+    
+    if (charts.finalComparison) {
+      console.error('\n' + charts.finalComparison);
+    }
+  } catch (err) {
+    console.error('Failed to generate terminal charts:', err.message);
+  }
+=======
+>>>>>>> origin/main
 }
 
 function generateAdditionalReports(result, options, ReportGenerator) {
@@ -273,6 +334,10 @@ function loadScript(relPath, sandbox) {
 ;if (typeof FailureHandler !== 'undefined') globalThis.FailureHandler = FailureHandler;
 ;if (typeof ResilientBenchmarkRunner !== 'undefined') globalThis.ResilientBenchmarkRunner = ResilientBenchmarkRunner;
 ;if (typeof GracefulDegradation !== 'undefined') globalThis.GracefulDegradation = GracefulDegradation;
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+>>>>>>> origin/main
 ;if (typeof ReportGenerator !== 'undefined') globalThis.ReportGenerator = ReportGenerator;
 ;if (typeof HTMLReportGenerator !== 'undefined') globalThis.HTMLReportGenerator = HTMLReportGenerator;
 ;if (typeof MarkdownReportGenerator !== 'undefined') globalThis.MarkdownReportGenerator = MarkdownReportGenerator;
@@ -281,8 +346,13 @@ function loadScript(relPath, sandbox) {
 ;if (typeof BatchAnalyzer !== 'undefined') globalThis.BatchAnalyzer = BatchAnalyzer;
 ;if (typeof BenchmarkVisualizer !== 'undefined') globalThis.BenchmarkVisualizer = BenchmarkVisualizer;
 ;if (typeof HeatmapGenerator !== 'undefined') globalThis.HeatmapGenerator = HeatmapGenerator;
+<<<<<<< HEAD
 ;if (typeof AdvancedMetrics !== 'undefined') globalThis.AdvancedMetrics = AdvancedMetrics;
 ;if (typeof MetricsAggregator !== 'undefined') globalThis.MetricsAggregator = MetricsAggregator;
+=======
+=======
+>>>>>>> origin/main
+>>>>>>> origin/main
 ;if (typeof Game !== 'undefined') globalThis.Game = Game;
 ;if (typeof module !== 'undefined' && module.exports) {
   const exported = module.exports;
@@ -365,6 +435,10 @@ async function runSingle(config, options, sandbox) {
     console.error(`Report: ${outPath}`);
   }
 
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+>>>>>>> origin/main
   // Generate additional report formats
   if (options.reportFormat) {
     const { ReportGenerator } = sandbox;
@@ -377,12 +451,17 @@ async function runSingle(config, options, sandbox) {
     showTerminalCharts(report, BenchmarkVisualizer);
   }
 
+<<<<<<< HEAD
   // Compute advanced metrics if requested
   if (options.advancedMetrics) {
     const { AdvancedMetrics } = sandbox;
     computeAdvancedMetrics(report, options, AdvancedMetrics);
   }
 
+=======
+=======
+>>>>>>> origin/main
+>>>>>>> origin/main
   return report;
 }
 
@@ -431,6 +510,10 @@ async function runBatch(batchConfig, options, sandbox) {
     console.error(`Batch report: ${outPath}`);
   }
 
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+>>>>>>> origin/main
   // Generate comparison analysis
   if (options.compareRuns) {
     const { BatchAnalyzer } = sandbox;
@@ -453,6 +536,11 @@ async function runBatch(batchConfig, options, sandbox) {
     }
   }
 
+<<<<<<< HEAD
+=======
+=======
+>>>>>>> origin/main
+>>>>>>> origin/main
   return summary;
 }
 
@@ -514,6 +602,10 @@ async function runSweep(sweepConfig, options, sandbox) {
     console.error(`Sweep report: ${outPath}`);
   }
 
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+>>>>>>> origin/main
   // Generate comparison analysis for sweep
   if (options.compareRuns) {
     const { BatchAnalyzer } = sandbox;
@@ -538,6 +630,11 @@ async function runSweep(sweepConfig, options, sandbox) {
     }
   }
 
+<<<<<<< HEAD
+=======
+=======
+>>>>>>> origin/main
+>>>>>>> origin/main
   return report;
 }
 
@@ -560,10 +657,19 @@ async function main() {
     'src/renderer/js/systems/batch-runner.js',
     'src/renderer/js/systems/progress-monitor.js',
     'src/renderer/js/systems/failure-handler.js',
+<<<<<<< HEAD
     'src/renderer/js/systems/report-generator.js',
     'src/renderer/js/systems/benchmark-analysis.js',
     'src/renderer/js/systems/visualizer.js',
     'src/renderer/js/systems/advanced-metrics.js',
+=======
+<<<<<<< HEAD
+    'src/renderer/js/systems/report-generator.js',
+    'src/renderer/js/systems/benchmark-analysis.js',
+    'src/renderer/js/systems/visualizer.js',
+=======
+>>>>>>> origin/main
+>>>>>>> origin/main
     'src/renderer/js/game.js'
   ];
 
