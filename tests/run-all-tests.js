@@ -16,7 +16,8 @@ const testSuites = [
   { name: 'Failure Handler', file: 'test-failure-handler.js' },
   { name: 'Report Generator', file: 'test-report-generator.js' },
   { name: 'Benchmark Analysis', file: 'test-benchmark-analysis.js' },
-  { name: 'Visualizer', file: 'test-visualizer.js' }
+  { name: 'Visualizer', file: 'test-visualizer.js' },
+  { name: 'Advanced Metrics', file: 'test-advanced-metrics.js' }
 ];
 
 let totalPassed = 0;
