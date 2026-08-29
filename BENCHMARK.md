@@ -88,4 +88,7 @@ npm run benchmark -- --days 10 --report-format html --charts
 
 # Generate reports from existing JSON
 node scripts/generate-report.js benchmark-report.json html --charts
+
+# Resume from checkpoint
+npm run benchmark -- --batch config.json --resume --checkpoint my-checkpoint.json
 ```
