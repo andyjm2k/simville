@@ -1,0 +1,68 @@
+{
+  "description": "Example: Compare two different models",
+  "runs": [
+    {
+      "seed": 4242,
+      "days": 20,
+      "dayLengthMs": 30000,
+      "tickIntervalMs": 5000,
+      "output": "results/gpt4o-mini-run1.json",
+      "agentA": {
+        "type": "llm",
+        "name": "gpt-4o-mini",
+        "endpoint": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "apiKey": "YOUR_API_KEY",
+        "temperature": 0.4,
+        "maxTokens": 500
+      },
+      "agentB": {
+        "type": "baseline",
+        "name": "heuristic"
+      }
+    },
+    {
+      "seed": 4243,
+      "days": 20,
+      "dayLengthMs": 30000,
+      "tickIntervalMs": 5000,
+      "output": "results/gpt4o-mini-run2.json",
+      "agentA": {
+        "type": "llm",
+        "name": "gpt-4o-mini",
+        "endpoint": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "apiKey": "YOUR_API_KEY",
+        "temperature": 0.4,
+        "maxTokens": 500
+      },
+      "agentB": {
+        "type": "baseline",
+        "name": "heuristic"
+      }
+    },
+    {
+      "seed": 4244,
+      "days": 20,
+      "dayLengthMs": 30000,
+      "tickIntervalMs": 5000,
+      "output": "results/gpt4o-mini-run3.json",
+      "agentA": {
+        "type": "llm",
+        "name": "gpt-4o-mini",
+        "endpoint": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "apiKey": "YOUR_API_KEY",
+        "temperature": 0.4,
+        "maxTokens": 500
+      },
+      "agentB": {
+        "type": "baseline",
+        "name": "heuristic"
+      }
+    }
+  ],
+  "output": "results/model-comparison-batch.json",
+  "analysisOutput": "results/model-comparison-analysis.json",
+  "groupBy": "config.agentA.model"
+}

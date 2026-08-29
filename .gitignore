@@ -6,8 +6,15 @@ coverage/
 
 # Benchmark outputs
 benchmark-report.json
+benchmark-report.html
+benchmark-report.md
+*.csv
 batch-report.json
 sweep-report.json
+*-analysis.json
+*-analysis.md
 *-checkpoint.json
 *.ckpt
 results/
+reports/
+data/

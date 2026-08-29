@@ -71,13 +71,23 @@ For batch execution, parameter sweeps, parallel workers, monitoring, and failure
 
 **[BENCHMARK-ADVANCED.md](./BENCHMARK-ADVANCED.md)** — Full operational features guide
 
+For report generation, visualizations, and analysis, see:
+
+**[BENCHMARK-REPORTING.md](./BENCHMARK-REPORTING.md)** — Complete reporting & visualization guide
+
 Quick examples:
 ```bash
 # Batch execution with 4 parallel workers
 npm run benchmark -- --batch batch-benchmark.example.json --parallel 4
 
-# Parameter sweep with replicates
-npm run benchmark -- --sweep sweep-benchmark.example.json --parallel 4 --verbose
+# Parameter sweep with comparison analysis
+npm run benchmark -- --sweep sweep-benchmark.example.json --parallel 4 --compare
+
+# Generate HTML report with charts
+npm run benchmark -- --days 10 --report-format html --charts
+
+# Generate reports from existing JSON
+node scripts/generate-report.js benchmark-report.json html --charts
 
 # Resume from checkpoint
 npm run benchmark -- --batch config.json --resume --checkpoint my-checkpoint.json
