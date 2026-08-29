@@ -75,6 +75,8 @@ For report generation, visualizations, and analysis, see:
 
 **[BENCHMARK-REPORTING.md](./BENCHMARK-REPORTING.md)** — Complete reporting & visualization guide
 
+**[BENCHMARK-METRICS.md](./BENCHMARK-METRICS.md)** — Advanced metrics and analysis
+
 Quick examples:
 ```bash
 # Batch execution with 4 parallel workers

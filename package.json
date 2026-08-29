@@ -17,6 +17,7 @@
     "test:report": "node tests/test-report-generator.js",
     "test:analysis": "node tests/test-benchmark-analysis.js",
     "test:visualizer": "node tests/test-visualizer.js",
+    "test:metrics": "node tests/test-advanced-metrics.js",
     "test:regression": "node tests/qa/harness.mjs --regression",
     "test:coverage": "vitest run --coverage",
     "test:suite": "node tests/qa/harness.mjs --suite",

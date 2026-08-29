@@ -31,16 +31,13 @@ function parseArgs(argv) {
     verbose: false,
     silent: false,
     checkpoint: 'batch-checkpoint.json',
-<<<<<<< HEAD
     resumeCheckpoint: false,
     reportFormat: null, // html, markdown, csv
     reportOutput: null,
     generateCharts: false,
     compareRuns: false,
-    showTerminalCharts: false
-=======
-    resumeCheckpoint: false
->>>>>>> origin/main
+    showTerminalCharts: false,
+    advancedMetrics: false
   };
 
   const singleRunConfig = {
@@ -85,7 +82,6 @@ function parseArgs(argv) {
       options.verbose = true;
     } else if (arg === '--silent' || arg === '-s') {
       options.silent = true;
-<<<<<<< HEAD
     } else if (arg === '--report-format' && argv[i + 1]) {
       options.reportFormat = argv[++i];
     } else if (arg === '--report-output' && argv[i + 1]) {
@@ -96,8 +92,8 @@ function parseArgs(argv) {
       options.showTerminalCharts = true;
     } else if (arg === '--compare') {
       options.compareRuns = true;
-=======
->>>>>>> origin/main
+    } else if (arg === '--advanced-metrics' || arg === '--metrics') {
+      options.advancedMetrics = true;
     } else if (arg === '--help' || arg === '-h') {
       console.log(`Simville benchmark runner
 
@@ -122,16 +118,15 @@ Options:
   --silent, -s          Minimal output
   --help, -h            Show this help
 
-<<<<<<< HEAD
 Report Options:
   --report-format <fmt> Generate report (html, markdown, csv)
   --report-output <file> Report output path
   --charts              Generate charts in HTML reports
   --terminal-charts     Show ASCII charts in terminal
   --compare             Generate comparison analysis (batch/sweep only)
+  --advanced-metrics    Compute advanced performance metrics
+  --metrics             Alias for --advanced-metrics
 
-=======
->>>>>>> origin/main
 Env: SIMVILLE_LLM_ENDPOINT, SIMVILLE_LLM_MODEL, SIMVILLE_LLM_API_KEY`);
       process.exit(0);
     }
@@ -145,7 +140,6 @@ Env: SIMVILLE_LLM_ENDPOINT, SIMVILLE_LLM_MODEL, SIMVILLE_LLM_API_KEY`);
   }
 
   return { options, singleRunConfig };
-<<<<<<< HEAD
 }
 
 function generateAdditionalReports(result, options, ReportGenerator) {
@@ -194,8 +188,63 @@ function showTerminalCharts(result, BenchmarkVisualizer) {
   } catch (err) {
     console.error('Failed to generate terminal charts:', err.message);
   }
-=======
->>>>>>> origin/main
+}
+
+function computeAdvancedMetrics(result, options, AdvancedMetrics) {
+  if (!options.advancedMetrics) return;
+  
+  try {
+    const metrics = new AdvancedMetrics(result);
+    const allMetrics = metrics.computeAll();
+    
+    // Save to JSON file
+    const metricsPath = result.config?.output?.replace('.json', '') || 'benchmark-report';
+    const outputPath = `${metricsPath}-metrics.json`;
+    fs.writeFileSync(outputPath, JSON.stringify(allMetrics, null, 2), 'utf8');
+    console.error(`\nAdvanced metrics: ${outputPath}`);
+    
+    // Print summary to console
+    console.error('\n=== Advanced Metrics Summary ===');
+    
+    // Efficiency metrics
+    if (allMetrics.efficiency) {
+      console.error('\nEfficiency:');
+      for (const [villageId, eff] of Object.entries(allMetrics.efficiency)) {
+        const villageName = result.final?.find(v => v.villageId === villageId)?.villageName || villageId;
+        console.error(`  ${villageName}:`);
+        console.error(`    - Resources per villager: ${eff.resourcesPerVillager}`);
+        console.error(`    - Efficiency score: ${eff.efficiencyScore}`);
+        console.error(`    - Population growth: ${eff.populationGrowthRate}`);
+      }
+    }
+    
+    // LLM Performance
+    if (allMetrics.llmPerformance) {
+      console.error('\nLLM Performance:');
+      for (const [villageId, perf] of Object.entries(allMetrics.llmPerformance)) {
+        if (perf.type === 'baseline') continue;
+        const villageName = result.final?.find(v => v.villageId === villageId)?.villageName || villageId;
+        console.error(`  ${villageName} (${perf.model || 'unknown'}):`);
+        console.error(`    - Success rate: ${perf.successRate}`);
+        console.error(`    - Avg latency: ${perf.avgLatencyMs}ms`);
+        console.error(`    - Estimated cost: ${perf.estimatedCostUSD}`);
+      }
+    }
+    
+    // Statistical comparison
+    if (allMetrics.statistical && allMetrics.statistical.scoreDifference) {
+      console.error('\nStatistical Analysis:');
+      console.error(`  - Score difference: ${allMetrics.statistical.scoreDifference.absolute}`);
+      console.error(`  - Effect size: ${allMetrics.statistical.scoreDifference.effectSize}`);
+      console.error(`  - Dominance: ${allMetrics.statistical.dominance}`);
+      console.error(`  - Competitiveness: ${allMetrics.statistical.competitiveness}`);
+    }
+    
+    return allMetrics;
+  } catch (err) {
+    console.error('Failed to compute advanced metrics:', err.message);
+    return null;
+  }
 }
 
 function loadScript(relPath, sandbox) {
@@ -224,7 +273,6 @@ function loadScript(relPath, sandbox) {
 ;if (typeof FailureHandler !== 'undefined') globalThis.FailureHandler = FailureHandler;
 ;if (typeof ResilientBenchmarkRunner !== 'undefined') globalThis.ResilientBenchmarkRunner = ResilientBenchmarkRunner;
 ;if (typeof GracefulDegradation !== 'undefined') globalThis.GracefulDegradation = GracefulDegradation;
-<<<<<<< HEAD
 ;if (typeof ReportGenerator !== 'undefined') globalThis.ReportGenerator = ReportGenerator;
 ;if (typeof HTMLReportGenerator !== 'undefined') globalThis.HTMLReportGenerator = HTMLReportGenerator;
 ;if (typeof MarkdownReportGenerator !== 'undefined') globalThis.MarkdownReportGenerator = MarkdownReportGenerator;
@@ -233,8 +281,8 @@ function loadScript(relPath, sandbox) {
 ;if (typeof BatchAnalyzer !== 'undefined') globalThis.BatchAnalyzer = BatchAnalyzer;
 ;if (typeof BenchmarkVisualizer !== 'undefined') globalThis.BenchmarkVisualizer = BenchmarkVisualizer;
 ;if (typeof HeatmapGenerator !== 'undefined') globalThis.HeatmapGenerator = HeatmapGenerator;
-=======
->>>>>>> origin/main
+;if (typeof AdvancedMetrics !== 'undefined') globalThis.AdvancedMetrics = AdvancedMetrics;
+;if (typeof MetricsAggregator !== 'undefined') globalThis.MetricsAggregator = MetricsAggregator;
 ;if (typeof Game !== 'undefined') globalThis.Game = Game;
 ;if (typeof module !== 'undefined' && module.exports) {
   const exported = module.exports;
@@ -317,7 +365,6 @@ async function runSingle(config, options, sandbox) {
     console.error(`Report: ${outPath}`);
   }
 
-<<<<<<< HEAD
   // Generate additional report formats
   if (options.reportFormat) {
     const { ReportGenerator } = sandbox;
@@ -330,8 +377,12 @@ async function runSingle(config, options, sandbox) {
     showTerminalCharts(report, BenchmarkVisualizer);
   }
 
-=======
->>>>>>> origin/main
+  // Compute advanced metrics if requested
+  if (options.advancedMetrics) {
+    const { AdvancedMetrics } = sandbox;
+    computeAdvancedMetrics(report, options, AdvancedMetrics);
+  }
+
   return report;
 }
 
@@ -380,7 +431,6 @@ async function runBatch(batchConfig, options, sandbox) {
     console.error(`Batch report: ${outPath}`);
   }
 
-<<<<<<< HEAD
   // Generate comparison analysis
   if (options.compareRuns) {
     const { BatchAnalyzer } = sandbox;
@@ -403,8 +453,6 @@ async function runBatch(batchConfig, options, sandbox) {
     }
   }
 
-=======
->>>>>>> origin/main
   return summary;
 }
 
@@ -466,7 +514,6 @@ async function runSweep(sweepConfig, options, sandbox) {
     console.error(`Sweep report: ${outPath}`);
   }
 
-<<<<<<< HEAD
   // Generate comparison analysis for sweep
   if (options.compareRuns) {
     const { BatchAnalyzer } = sandbox;
@@ -491,8 +538,6 @@ async function runSweep(sweepConfig, options, sandbox) {
     }
   }
 
-=======
->>>>>>> origin/main
   return report;
 }
 
@@ -515,12 +560,10 @@ async function main() {
     'src/renderer/js/systems/batch-runner.js',
     'src/renderer/js/systems/progress-monitor.js',
     'src/renderer/js/systems/failure-handler.js',
-<<<<<<< HEAD
     'src/renderer/js/systems/report-generator.js',
     'src/renderer/js/systems/benchmark-analysis.js',
     'src/renderer/js/systems/visualizer.js',
-=======
->>>>>>> origin/main
+    'src/renderer/js/systems/advanced-metrics.js',
     'src/renderer/js/game.js'
   ];
 
