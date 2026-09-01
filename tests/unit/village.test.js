@@ -58,6 +58,36 @@ describe('Village', () => {
     expect(restored.relations).toEqual(original.relations);
   });
 
+  it('stores distinct chronicle and tech state per village', () => {
+    const village = new Village({
+      name: 'Eldervale',
+      displayIndex: 0,
+      chronicle: {
+        legendary: [{ title: 'Founding', text: 'We arrived.', day: 1 }],
+        entries: [{ text: 'Day 1 begins.', day: 1, type: 'normal' }],
+        stats: { births: 1, deaths: 0, structuresBuilt: 2, marriages: 0 }
+      },
+      techState: {
+        researched: ['agriculture'],
+        currentResearch: { techId: 'tool_crafting', progress: 0.5, startDay: 1 },
+        researchSpeed: 1
+      }
+    });
+
+    const restored = Village.deserialize(village.serialize());
+    expect(restored.chronicle.entries).toHaveLength(1);
+    expect(restored.chronicle.stats.births).toBe(1);
+    expect(restored.techState.researched).toContain('agriculture');
+    expect(restored.techState.currentResearch.techId).toBe('tool_crafting');
+    expect(restored.displayIndex).toBe(0);
+  });
+
+  it('uses display index for stable tribe colors', () => {
+    const first = new Village({ displayIndex: 0 });
+    const second = new Village({ displayIndex: 1 });
+    expect(first.getColor()).not.toBe(second.getColor());
+  });
+
   it('filters villagers by villagerIds membership', () => {
     const village = new Village({ villagerIds: ['keep-me'] });
     const all = [

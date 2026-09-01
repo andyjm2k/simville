@@ -41,8 +41,36 @@ class Village {
     // Structures owned by this village
     this.structureIds = data.structureIds || [];
 
+    // Per-village chronicle and technology (distinct tribe identity)
+    this.chronicle = data.chronicle || this.createDefaultChronicle();
+    this.techState = data.techState || this.createDefaultTechState();
+
+    // Stable index for colors and UI (0 = first tribe, 1 = second, etc.)
+    this.displayIndex = data.displayIndex ?? null;
+
     // Conquest baseline population
     this.originalPopulation = data.originalPopulation ?? null;
+  }
+
+  createDefaultChronicle() {
+    return {
+      legendary: [],
+      entries: [],
+      stats: {
+        births: 0,
+        deaths: 0,
+        structuresBuilt: 0,
+        marriages: 0
+      }
+    };
+  }
+
+  createDefaultTechState() {
+    return {
+      researched: [],
+      currentResearch: null,
+      researchSpeed: 1
+    };
   }
 
   generateVillageName() {
@@ -131,8 +159,10 @@ class Village {
 
   // Get display color for this village
   getColor() {
-    // Return a distinct color for this village (used in UI)
     const colors = ['#4ecca3', '#e94560', '#45b7d1', '#f5a623'];
+    if (this.displayIndex != null) {
+      return colors[this.displayIndex % colors.length];
+    }
     const hash = this.id.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
     return colors[hash % colors.length];
   }
@@ -152,6 +182,9 @@ class Village {
       atWarWith: [...this.atWarWith],
       raidCooldown: this.raidCooldown,
       structureIds: [...this.structureIds],
+      chronicle: JSON.parse(JSON.stringify(this.chronicle)),
+      techState: JSON.parse(JSON.stringify(this.techState)),
+      displayIndex: this.displayIndex,
       originalPopulation: this.originalPopulation
     };
   }

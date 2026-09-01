@@ -200,6 +200,7 @@ export function installMinimalDom() {
         <button id="btn-settings"></button>
       </div>
       <div id="resource-bar">
+        <span id="tribe-label"></span>
         <span id="res-wood"></span>
         <span id="res-food"></span>
         <span id="res-water"></span>
@@ -211,6 +212,7 @@ export function installMinimalDom() {
         <span id="res-rare"></span>
         <span id="res-population"></span>
       </div>
+      <div id="tribe-selector"></div>
       <canvas id="game-canvas" width="1280" height="644"></canvas>
       <canvas id="minimap-canvas" width="150" height="150"></canvas>
       <div id="villager-panel" class="panel hidden">
