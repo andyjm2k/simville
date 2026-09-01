@@ -998,6 +998,43 @@ class WorldRenderer {
     }
   }
 
+  renderTerritories(villages = [], selectedVillageId = null) {
+    if (!villages.length) return;
+
+    const ctx = this.ctx;
+    const scale = this.tileSize * this.camera.zoom;
+    const territoryColors = ['rgba(78, 204, 163, 0.12)', 'rgba(233, 69, 96, 0.12)'];
+
+    villages.forEach((village, idx) => {
+      const isSelected = village.id === selectedVillageId;
+      const baseColor = territoryColors[idx] || 'rgba(128, 128, 128, 0.1)';
+      const screen = this.worldToScreen(village.center.x, village.center.y);
+      const radius = village.territoryRadius * scale;
+
+      ctx.save();
+      ctx.fillStyle = isSelected ? baseColor.replace('0.12', '0.22') : baseColor;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = village.getColor();
+      ctx.lineWidth = isSelected ? 2.5 : 1.5;
+      ctx.setLineDash(isSelected ? [] : [6, 4]);
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      if (this.camera.zoom >= 0.5) {
+        ctx.font = `bold ${Math.max(10, 12 * this.camera.zoom)}px Courier New, monospace`;
+        ctx.fillStyle = village.getColor();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(village.name, screen.x, screen.y - radius - 4);
+      }
+      ctx.restore();
+    });
+  }
+
   renderResourceIndicator(ctx, resource, screenX, screenY, tileSize) {
     const iconSize = tileSize * 0.6;
     const offsetX = (tileSize - iconSize) / 2;

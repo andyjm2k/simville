@@ -399,18 +399,29 @@ class Villager {
   }
 
   startWandering(world) {
-    const cx = Math.round(this.x);
-    const cy = Math.round(this.y);
+    const village = game?.getVillage?.(this.villageId);
+    const anchor = village?.center || { x: Math.round(this.x), y: Math.round(this.y) };
+    const territoryRadius = village?.territoryRadius || 8;
 
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const radius = 3 + Math.floor(Math.random() * 3); // 3-5 tiles away
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const radius = 2 + Math.floor(Math.random() * Math.min(4, territoryRadius - 2));
       const angle = Math.random() * Math.PI * 2;
-      const tx = Math.round(cx + Math.cos(angle) * radius);
-      const ty = Math.round(cy + Math.sin(angle) * radius);
+      const tx = Math.round(anchor.x + Math.cos(angle) * radius);
+      const ty = Math.round(anchor.y + Math.sin(angle) * radius);
       const tile = world.getWalkableTileNear(tx, ty, 2);
+      if (tile && village && !village.isInTerritory(tile.x, tile.y)) continue;
       if (tile && this.moveTo(tile.x, tile.y, world)) {
         return;
       }
+    }
+
+    // Fallback: stay near village center
+    if (village) {
+      this.moveTo(
+        village.center.x + Utils.randomFloat(-1.5, 1.5),
+        village.center.y + Utils.randomFloat(-1.5, 1.5),
+        world
+      );
     }
   }
 
@@ -839,18 +850,39 @@ class VillagerRenderer {
   }
 
   getClothingColor(villager) {
+    const village = game?.getVillage?.(villager.villageId);
+    const tribeTint = village?.getColor?.() || null;
+
     // Base clothing on title/role
-    if (villager.isChieftan) return '#8b4513'; // Brown leather
-    if (villager.title.includes('Hunter')) return '#228b22'; // Green
-    if (villager.title.includes('Fisher')) return '#1e90ff'; // Blue
-    if (villager.title.includes('Craftsman')) return '#daa520'; // Golden
-    if (villager.title.includes('Elder')) return '#9370db'; // Purple
+    let baseColor = '#6c5b7b';
+    if (villager.isChieftan) baseColor = '#8b4513';
+    else if (villager.title.includes('Hunter')) baseColor = '#228b22';
+    else if (villager.title.includes('Fisher')) baseColor = '#1e90ff';
+    else if (villager.title.includes('Craftsman')) baseColor = '#daa520';
+    else if (villager.title.includes('Elder')) baseColor = '#9370db';
+    else if (villager.personality.sociable > 70) baseColor = '#ff6b6b';
+    else if (villager.personality.active > 70) baseColor = '#f7dc6f';
 
-    // Base on personality for variety
-    if (villager.personality.sociable > 70) return '#ff6b6b'; // Red for outgoing
-    if (villager.personality.active > 70) return '#f7dc6f'; // Yellow for active
+    if (!tribeTint) return baseColor;
+    return this.blendColors(baseColor, tribeTint, 0.35);
+  }
 
-    return '#6c5b7b'; // Default purple-ish
+  blendColors(colorA, colorB, ratio = 0.5) {
+    const parse = (hex) => {
+      const value = hex.replace('#', '');
+      return [
+        parseInt(value.slice(0, 2), 16),
+        parseInt(value.slice(2, 4), 16),
+        parseInt(value.slice(4, 6), 16)
+      ];
+    };
+    const [r1, g1, b1] = parse(colorA);
+    const [r2, g2, b2] = parse(colorB);
+    const mix = (a, b) => Math.round(a * (1 - ratio) + b * ratio);
+    const r = mix(r1, r2);
+    const g = mix(g1, g2);
+    const b = mix(b1, b2);
+    return `#${[r, g, b].map(v => v.toString(16).padStart(2, '0')).join('')}`;
   }
 
   renderSpeechBubble(ctx, bubble, x, y) {
@@ -897,7 +929,7 @@ class VillagerRenderer {
 
     // Text
     ctx.font = `${10 * camera.zoom}px Arial`;
-    ctx.fillStyle = villager.isChieftan ? '#ffd700' : '#ffffff';
+    ctx.fillStyle = villager.isChieftan ? '#ffd700' : (game?.getVillage?.(villager.villageId)?.getColor?.() || '#ffffff');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(villager.name, screenX, labelY);

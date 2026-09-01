@@ -141,6 +141,62 @@ body {
   color: var(--success);
 }
 
+.tribe-label {
+  font-weight: bold;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+#tribe-selector {
+  display: flex;
+  gap: 8px;
+  padding: 6px 16px;
+  background: rgba(15, 52, 96, 0.85);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 100;
+}
+
+#tribe-selector.hidden {
+  display: none;
+}
+
+.tribe-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 2px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.tribe-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tribe-btn.active {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.tribe-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.tribe-btn small {
+  color: var(--text-secondary);
+}
+
 /* ===== Game Canvas ===== */
 #game-canvas {
   flex: 1;

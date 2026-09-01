@@ -35,6 +35,11 @@ class UIManager {
       resThatch: document.getElementById('res-thatch'),
       resRareMaterials: document.getElementById('res-rare'),
       resPopulation: document.getElementById('res-population'),
+      tribeSelector: document.getElementById('tribe-selector'),
+      tribeLabel: document.getElementById('tribe-label'),
+      chroniclePanelTitle: document.getElementById('chronicle-panel-title'),
+      techPanelTitle: document.getElementById('tech-panel-title'),
+      buildPanelTitle: document.getElementById('build-panel-title'),
 
       // Panels
       villagerPanel: document.getElementById('villager-panel'),
@@ -126,8 +131,8 @@ class UIManager {
       }
       if (e.key === 'l' || e.key === 'L') {
         if (!this.isInputFocused()) {
-          if (game?.chronicle) {
-            this.showChronicle(game.chronicle);
+          if (game?.getChronicle) {
+            this.showChronicle(game.getChronicle());
           }
         }
       }
@@ -141,8 +146,8 @@ class UIManager {
     // HUD buttons
     this.elements.btnPause?.addEventListener('click', () => game?.togglePause());
     this.elements.btnChronicle?.addEventListener('click', () => {
-      if (game?.chronicle) {
-        this.showChronicle(game.chronicle);
+      if (game?.getChronicle) {
+        this.showChronicle(game.getChronicle());
       }
     });
     this.elements.btnBuild?.addEventListener('click', () => this.togglePanel('build-menu'));
@@ -255,7 +260,8 @@ class UIManager {
     }, duration);
   }
 
-  updateHUD(timeState, resources, paused, villages = []) {
+  updateHUD(timeState, resources, paused, villages = [], selectedVillage = null) {
+    const activeVillage = selectedVillage || villages.find(v => v.id === game?.hudVillageId) || villages[0] || null;
     // Time display
     const timeStr = Utils.formatTime(timeState.hours);
     this.elements.timeDisplay.textContent = `Day ${timeState.day}, ${timeStr}`;
@@ -284,8 +290,15 @@ class UIManager {
     if (this.elements.resRareMaterials) this.elements.resRareMaterials.textContent = this.formatResourceAmount(resources.rareMaterials);
     this.elements.resPopulation.textContent = window.game?.villagers?.length || 0;
 
-    // Update population to show both villages combined if applicable
-    if (villages.length > 1) {
+    if (activeVillage) {
+      const tribePop = activeVillage.villagerIds?.length || 0;
+      this.elements.resPopulation.textContent = tribePop;
+      if (this.elements.tribeLabel) {
+        this.elements.tribeLabel.textContent = activeVillage.name;
+        this.elements.tribeLabel.style.color = activeVillage.getColor?.() || 'var(--text-primary)';
+      }
+      this.updateTribePanelTitles(activeVillage);
+    } else if (villages.length > 1) {
       const totalPop = villages.reduce((sum, v) => sum + (v.villagerIds?.length || 0), 0);
       this.elements.resPopulation.textContent = totalPop;
     }
@@ -319,7 +332,14 @@ class UIManager {
     }
 
     this.elements.villagerName.textContent = `${villager.name} (${villager.gender}, ${villager.age})`;
-    this.elements.villagerTitle.textContent = villager.title;
+    const village = window.game?.getVillage?.(villager.villageId);
+    if (village) {
+      this.elements.villagerTitle.textContent = `${villager.title} · ${village.name}`;
+      this.elements.villagerTitle.style.color = village.getColor?.() || '';
+    } else {
+      this.elements.villagerTitle.textContent = villager.title;
+      this.elements.villagerTitle.style.color = '';
+    }
 
     // Portrait emoji
     let portraitEmoji = '👤';
@@ -609,8 +629,55 @@ class UIManager {
     return labels[resource] || resource.slice(0, 1).toUpperCase();
   }
 
+  updateTribePanelTitles(village) {
+    if (!village) return;
+    const color = village.getColor?.() || 'var(--text-primary)';
+    if (this.elements.chroniclePanelTitle) {
+      this.elements.chroniclePanelTitle.textContent = `${village.name} Chronicle`;
+      this.elements.chroniclePanelTitle.style.color = color;
+    }
+    if (this.elements.techPanelTitle) {
+      this.elements.techPanelTitle.textContent = `${village.name} Technology`;
+      this.elements.techPanelTitle.style.color = color;
+    }
+    if (this.elements.buildPanelTitle) {
+      this.elements.buildPanelTitle.textContent = `Build for ${village.name}`;
+      this.elements.buildPanelTitle.style.color = color;
+    }
+  }
+
+  updateTribeSelector(villages = [], selectedVillageId = null) {
+    const container = this.elements.tribeSelector;
+    if (!container) return;
+
+    container.innerHTML = '';
+    if (villages.length <= 1) {
+      container.classList.add('hidden');
+      return;
+    }
+
+    container.classList.remove('hidden');
+    villages.forEach((village) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tribe-btn' + (village.id === selectedVillageId ? ' active' : '');
+      btn.dataset.villageId = village.id;
+      btn.style.borderColor = village.getColor?.() || 'var(--border-color)';
+      btn.innerHTML = `<span class="tribe-dot" style="background:${village.getColor?.() || '#fff'}"></span>${Utils.escapeHtml(village.name)} <small>(${village.villagerIds?.length || 0})</small>`;
+      btn.addEventListener('click', () => {
+        game?.setSelectedVillage(village.id);
+        game?.worldRenderer?.centerOn(village.center.x, village.center.y);
+        game.cameraTarget = null;
+      });
+      container.appendChild(btn);
+    });
+  }
+
   showChronicle(chronicle) {
     if (!chronicle) return;
+
+    const selectedVillage = game?.getSelectedVillage?.();
+    this.updateTribePanelTitles(selectedVillage);
 
     const entries = chronicle.entries || [];
     const totalPages = Math.max(1, Math.ceil(entries.length / this.entriesPerPage));
@@ -635,7 +702,7 @@ class UIManager {
 
     if (this.elements.chronicleRuleList) {
       this.elements.chronicleRuleList.innerHTML = '';
-      const activeRules = window.game?.getActiveRules?.() || [];
+      const activeRules = window.game?.getActiveRules?.(selectedVillage?.id) || [];
       if (activeRules.length === 0) {
         const li = document.createElement('li');
         li.className = 'chronicle-entry';
@@ -684,7 +751,10 @@ class UIManager {
   }
 
   showTechPanel() {
-    if (!game?.techState) return;
+    const selectedVillage = game?.getSelectedVillage?.();
+    if (!selectedVillage?.techState && !game?.getTechState) return;
+
+    this.updateTribePanelTitles(selectedVillage);
 
     const availableList = document.getElementById('tech-available-list');
     const researchedList = document.getElementById('tech-researched-list');
@@ -693,7 +763,7 @@ class UIManager {
     if (!availableList || !researchedList) return;
 
     // Current research
-    const currentResearch = game.getTechResearchProgress();
+    const currentResearch = game.getTechResearchProgress(selectedVillage?.id);
     if (currentResearch) {
       const pct = Number(currentResearch.percent) || 0;
       researchInfo.innerHTML = `
@@ -712,7 +782,7 @@ class UIManager {
 
     // Available technologies
     availableList.innerHTML = '';
-    const available = game.getAvailableTechs();
+    const available = game.getAvailableTechs(selectedVillage?.id);
     if (available.length === 0) {
       const li = document.createElement('div');
       li.className = 'tech-no-available';
@@ -740,7 +810,7 @@ class UIManager {
         `;
 
         item.addEventListener('click', () => {
-          if (game.startTechResearch(tech.id)) {
+          if (game.startTechResearch(tech.id, selectedVillage?.id)) {
             this.showTechPanel();
             game.ui.showToast(`Started researching ${tech.name}`);
           }
@@ -752,7 +822,7 @@ class UIManager {
 
     // Researched technologies
     researchedList.innerHTML = '';
-    const researched = game.getResearchedTechs();
+    const researched = game.getResearchedTechs(selectedVillage?.id);
     if (researched.length === 0) {
       const li = document.createElement('div');
       li.className = 'tech-no-researched';
@@ -784,18 +854,18 @@ class UIManager {
   prevChroniclePage() {
     if (this.chroniclePage > 0) {
       this.chroniclePage--;
-      if (game?.chronicle) {
-        this.showChronicle(game.chronicle);
+      if (game?.getChronicle) {
+        this.showChronicle(game.getChronicle());
       }
     }
   }
 
   nextChroniclePage() {
-    const totalPages = Math.ceil((game?.chronicle?.entries?.length || 0) / this.entriesPerPage);
+    const totalPages = Math.ceil((game?.getChronicle?.(game?.getSelectedVillage?.()?.id)?.entries?.length || 0) / this.entriesPerPage);
     if (this.chroniclePage < totalPages - 1) {
       this.chroniclePage++;
-      if (game?.chronicle) {
-        this.showChronicle(game.chronicle);
+      if (game?.getChronicle) {
+        this.showChronicle(game.getChronicle());
       }
     }
   }

@@ -38,24 +38,7 @@ class Game {
     this.techDecisionAccumulator = 0;
     this.techDecisionInterval = 30000; // Ask LLM about tech research every 30 seconds
 
-    this.chronicle = {
-      legendary: [],
-      entries: [],
-      stats: {
-        births: 0,
-        deaths: 0,
-        structuresBuilt: 0,
-        marriages: 0
-      }
-    };
     this.chronicleDirty = true;
-
-    // Technology research state
-    this.techState = {
-      researched: [],
-      currentResearch: null,
-      researchSpeed: 1
-    };
 
     this.graphicsSettings = {
       showLabels: true,
@@ -100,6 +83,49 @@ class Game {
     return this.villages.find(v => v.id === id);
   }
 
+  // Currently selected tribe for HUD, chronicle, tech tree, and build menu
+  getSelectedVillage() {
+    return this.getVillage(this.hudVillageId) || this.villages[0] || null;
+  }
+
+  setSelectedVillage(villageId) {
+    const village = this.getVillage(villageId);
+    if (!village) return;
+    this.hudVillageId = village.id;
+    this.chronicleDirty = true;
+    this.ui?.updateTribeSelector?.(this.villages, village.id);
+    const displayResources = this.getHudResources();
+    this.ui?.updateHUD(this.timeState, displayResources, this.paused, this.villages, village);
+    this.ui?.updateBuildMenu?.(displayResources);
+    const chroniclePanel = document.getElementById('chronicle-panel');
+    if (chroniclePanel && !chroniclePanel.classList.contains('hidden')) {
+      this.ui.showChronicle(this.getChronicle(village.id));
+    }
+    const techPanel = document.getElementById('tech-panel');
+    if (techPanel && !techPanel.classList.contains('hidden')) {
+      this.ui.showTechPanel();
+    }
+  }
+
+  getChronicle(villageId = null) {
+    const village = villageId != null ? this.getVillage(villageId) : this.getSelectedVillage();
+    return village?.chronicle || { legendary: [], entries: [], stats: { births: 0, deaths: 0, structuresBuilt: 0, marriages: 0 } };
+  }
+
+  getTechState(villageId = null) {
+    const village = villageId != null ? this.getVillage(villageId) : this.getSelectedVillage();
+    return village?.techState || { researched: [], currentResearch: null, researchSpeed: 1 };
+  }
+
+  // Backward-compatible accessors for legacy code and saves
+  get chronicle() {
+    return this.getChronicle();
+  }
+
+  get techState() {
+    return this.getTechState();
+  }
+
   // Get villagers for a specific village
   getVillagersForVillage(villageId) {
     return this.villagers.filter(v => v.villageId === villageId);
@@ -122,7 +148,8 @@ class Game {
       const village = new Village({
         center: center,
         territoryRadius: CONSTANTS.VILLAGE.DEFAULT_RADIUS,
-        name: i === 0 ? 'Elder' + Utils.randomElement(['brook', 'vale', 'hollow']) : 'Shadow' + Utils.randomElement(['fall', 'mere', 'glen'])
+        name: i === 0 ? 'Elder' + Utils.randomElement(['brook', 'vale', 'hollow']) : 'Shadow' + Utils.randomElement(['fall', 'mere', 'glen']),
+        displayIndex: i
       });
 
       this.villages.push(village);
@@ -181,7 +208,16 @@ class Game {
     const priorWinningIds = new Set(winningVillage.villagerIds || []);
 
     // Chronicle entry
-    this.addChronicleEntry(`The ${losingVillage.name} has been conquered by ${winningVillage.name}! The era of ${losingVillage.name} ends as its people merge with their new allies.`);
+    this.addChronicleEntry(
+      `The ${losingVillage.name} has been conquered by ${winningVillage.name}! The era of ${losingVillage.name} ends as its people merge with their new allies.`,
+      'celebration',
+      winningVillageId
+    );
+    this.addChronicleEntry(
+      `${losingVillage.name} falls to ${winningVillage.name}. The tribe's independence is lost.`,
+      'legendary',
+      losingVillageId
+    );
 
     // Transfer resources before village is removed
     if (this.economy) {
@@ -456,6 +492,9 @@ class Game {
 
       if (clickedVillager) {
         this.selectedVillager = clickedVillager;
+        if (clickedVillager.villageId) {
+          this.setSelectedVillage(clickedVillager.villageId);
+        }
         // Zoom in on the villager
         this.worldRenderer.zoom(1); // Zoom in
         // Track the villager (center camera on them)
@@ -512,13 +551,14 @@ class Game {
     });
 
     window.electronAPI.onMenuChronicle(() => {
-      this.ui.showChronicle(this.chronicle);
+      this.ui.showChronicle(this.getChronicle());
     });
 
     window.electronAPI.onMenuVillagers(() => {
-      // Show villagers list
-      if (this.villagers.length > 0) {
-        this.selectedVillager = this.villagers[0];
+      const village = this.getSelectedVillage();
+      const villageVillagers = village ? this.getVillagersForVillage(village.id) : this.villagers;
+      if (villageVillagers.length > 0) {
+        this.selectedVillager = villageVillagers[0];
         this.ui.showVillagerPanel(this.selectedVillager);
       }
     });
@@ -710,26 +750,30 @@ class Game {
       { type: CONSTANTS.RESOURCE.STONE, radius: 12, amount: 20, maxAmount: 25, regrowRate: 0 }
     ];
 
-    required.forEach(resourceDef => {
-      const existing = this.world.getResourcesInRadius(
-        this.world.villageCenter.x,
-        this.world.villageCenter.y,
-        resourceDef.radius
-      ).some(resource => resource.type === resourceDef.type && !resource.depleted);
+    const centers = this.villages.length > 0
+      ? this.villages.map(v => v.center)
+      : (this.world.villageCenters.length > 0 ? this.world.villageCenters : [this.world.villageCenter]);
 
-      if (!existing) {
-        this.addWorldResourceNearVillage(resourceDef);
-      }
+    centers.forEach(center => {
+      required.forEach(resourceDef => {
+        const existing = this.world.getResourcesInRadius(center.x, center.y, resourceDef.radius)
+          .some(resource => resource.type === resourceDef.type && !resource.depleted);
+
+        if (!existing) {
+          this.addWorldResourceNearVillage(resourceDef, center);
+        }
+      });
     });
   }
 
-  addWorldResourceNearVillage(resourceDef) {
+  addWorldResourceNearVillage(resourceDef, center = null) {
+    const villageCenter = center || this.world.villageCenter;
     for (let radius = 3; radius <= 8; radius++) {
       for (let dy = -radius; dy <= radius; dy++) {
         for (let dx = -radius; dx <= radius; dx++) {
           if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue;
-          const x = this.world.villageCenter.x + dx;
-          const y = this.world.villageCenter.y + dy;
+          const x = villageCenter.x + dx;
+          const y = villageCenter.y + dy;
           const tile = this.world.getTile(x, y);
           if (!tile || !tile.walkable) continue;
           if (this.world.getResourceAt(x, y) || this.world.getStructureAt(x, y)) continue;
@@ -755,7 +799,6 @@ class Game {
     // Generate new world (creates 2 village centers)
     this.world = new World(64);
     this.world.generate();
-    this.ensureVillageResourceAccess();
     this.worldRenderer.world = this.world;
     this.worldRenderer.minimapCache = null;
     this.worldRenderer.camera.zoom = 1;
@@ -764,6 +807,7 @@ class Game {
 
     // Create villages
     this.createVillages(2);
+    this.ensureVillageResourceAccess();
 
     // Economy / raid systems once villages exist
     this.economy = new Economy(this);
@@ -801,22 +845,24 @@ class Game {
     this.constructionAccumulator = 0;
     this.goalAccumulator = 0;
 
-    // Reset chronicle
-    this.chronicle = {
-      legendary: [],
-      entries: [],
-      stats: {
-        births: 0,
-        deaths: 0,
-        structuresBuilt: 0,
-        marriages: 0
-      }
-    };
+    // Per-village chronicles start fresh
+    this.villages.forEach(village => {
+      village.chronicle = village.createDefaultChronicle();
+      village.techState = village.createDefaultTechState();
+    });
 
-    // Add first chronicle entry
-    const v1Name = this.villages[0]?.name || 'Simville';
-    const v2Name = this.villages[1]?.name || 'the rival village';
-    this.addChronicleEntry(`Two villages have been founded: ${v1Name} and ${v2Name}. The tribes begin building their settlements, unaware of the neighbors that will soon change everything.`);
+    // Founding chronicle entry for each tribe
+    this.villages.forEach((village, i) => {
+      const rival = this.villages[1 - i];
+      const rivalNote = rival
+        ? ` Beyond the hills, the rival tribe of ${rival.name} has also claimed land.`
+        : '';
+      this.addChronicleEntry(
+        `${village.name} has been founded at the heart of the wilds.${rivalNote} The people begin building their settlement.`,
+        'normal',
+        village.id
+      );
+    });
 
     // Center camera on first village
     this.worldRenderer.centerOn(this.world.villageCenters[0]?.x || this.world.size / 2, this.world.villageCenters[0]?.y || this.world.size / 2);
@@ -828,6 +874,7 @@ class Game {
     this.generateInitialBackstories();
 
     this.ui.showToast('Welcome to Simville - Two Villages!');
+    this.ui.updateTribeSelector(this.villages, this.hudVillageId);
   }
 
   async generateInitialBackstories() {
@@ -1081,6 +1128,8 @@ class Game {
       for (let j = i + 1; j < this.villagers.length; j++) {
         const a = this.villagers[i];
         const b = this.villagers[j];
+        // Initial bonds form within each tribe, not across rival villages
+        if (a.villageId !== b.villageId) continue;
         const base = Utils.randomInt(5, 18);
         const leadershipBonus = a.isChieftan || b.isChieftan ? 5 : 0;
         const warmth = Math.round(((a.personality?.empathetic || 50) + (b.personality?.empathetic || 50) - 100) / 12);
@@ -1090,21 +1139,24 @@ class Game {
       }
     }
 
-    const adults = this.villagers
-      .filter(v => v.age >= 18 && v.age <= 45)
-      .sort((a, b) => (b.personality?.empathetic || 50) + (b.personality?.sociable || 50) -
-        ((a.personality?.empathetic || 50) + (a.personality?.sociable || 50)));
-    const paired = new Set();
-    adults.forEach(a => {
-      if (paired.has(a.id) || paired.size >= 4) return;
-      const b = adults.find(other => other.id !== a.id && !paired.has(other.id));
-      if (!b) return;
-      const score = Utils.randomInt(50, 64);
-      a.relationships[b.id] = Math.max(a.relationships[b.id] || a.relationships[b.name] || 0, score);
-      b.relationships[a.id] = Math.max(b.relationships[a.id] || b.relationships[a.name] || 0, score);
-      paired.add(a.id);
-      paired.add(b.id);
-    });
+    // Pair couples within each village separately
+    for (const village of this.villages) {
+      const adults = this.getVillagersForVillage(village.id)
+        .filter(v => v.age >= 18 && v.age <= 45)
+        .sort((a, b) => (b.personality?.empathetic || 50) + (b.personality?.sociable || 50) -
+          ((a.personality?.empathetic || 50) + (a.personality?.sociable || 50)));
+      const paired = new Set();
+      adults.forEach(a => {
+        if (paired.has(a.id) || paired.size >= 2) return;
+        const b = adults.find(other => other.id !== a.id && !paired.has(other.id));
+        if (!b) return;
+        const score = Utils.randomInt(50, 64);
+        a.relationships[b.id] = Math.max(a.relationships[b.id] || a.relationships[b.name] || 0, score);
+        b.relationships[a.id] = Math.max(b.relationships[a.id] || b.relationships[a.name] || 0, score);
+        paired.add(a.id);
+        paired.add(b.id);
+      });
+    }
   }
 
   createStartingStructures() {
@@ -1222,7 +1274,8 @@ class Game {
     const displayResources = this.getHudResources();
 
     // Update UI
-    this.ui.updateHUD(this.timeState, displayResources, this.paused, this.villages);
+    const selectedVillage = this.getSelectedVillage();
+    this.ui.updateHUD(this.timeState, displayResources, this.paused, this.villages, selectedVillage);
     this.ui.updateBuildMenu(displayResources);
 
     // Update chronicle panel if open (dirty or every ~2s — avoid per-frame DOM thrash)
@@ -1230,7 +1283,7 @@ class Game {
     if (chroniclePanel && !chroniclePanel.classList.contains('hidden')) {
       const now = performance.now();
       if (this.chronicleDirty || now - this.lastChronicleRefreshMs >= 2000) {
-        this.ui.showChronicle(this.chronicle);
+        this.ui.showChronicle(this.getChronicle(selectedVillage?.id));
         this.chronicleDirty = false;
         this.lastChronicleRefreshMs = now;
       }
@@ -1272,24 +1325,30 @@ class Game {
 
       // Morning blessing fires at dawn, not midnight (SPEC §15)
       if (timeOfDay === 'dawn') {
-        this.performRitual(CONSTANTS.RITUAL.MORNING_BLESSING);
+        for (const village of this.villages) {
+          this.performRitual(CONSTANTS.RITUAL.MORNING_BLESSING, village.id);
+        }
       }
 
       // Occasional spirit communion at nightfall
       if (timeOfDay === 'night' && this.timeState.day % 11 === 0) {
-        this.performRitual(CONSTANTS.RITUAL.SPIRIT_COMMUNION);
+        for (const village of this.villages) {
+          this.performRitual(CONSTANTS.RITUAL.SPIRIT_COMMUNION, village.id);
+        }
       }
 
       const transitions = {
-        'dawn': 'The first rays of sunlight pierce through the canopy, and the village stirs to life.',
+        'dawn': 'The first rays of sunlight pierce through the canopy, and the tribe stirs to life.',
         'morning': 'The village is bustling with activity as the morning warmth settles in.',
         'afternoon': 'The heat of the day reaches its peak. Some villagers seek shade while others continue their work.',
         'evening': 'Golden light bathes the village as work winds down and people gather.',
-        'night': 'Darkness falls over Simville. The fire\'s glow is the heartbeat of the village.'
+        'night': 'Darkness falls. The fire\'s glow is the heartbeat of the village.'
       };
 
       if (transitions[timeOfDay]) {
-        this.addChronicleEntry(transitions[timeOfDay], 'normal');
+        for (const village of this.villages) {
+          this.addChronicleEntry(transitions[timeOfDay], 'normal', village.id);
+        }
       }
     }
   }
@@ -1317,11 +1376,15 @@ class Game {
   }
 
   onSeasonChange(previousSeason, newSeason) {
-    this.addChronicleEntry(`The ${newSeason.name} has begun.`);
+    for (const village of this.villages) {
+      this.addChronicleEntry(`The ${newSeason.name} has begun over ${village.name}.`, 'normal', village.id);
+    }
 
     // Harvest dance when leaving Harvest Season
     if (previousSeason?.name === CONSTANTS.SEASON.HARVEST.name) {
-      this.performRitual(CONSTANTS.RITUAL.HARVEST_DANCE);
+      for (const village of this.villages) {
+        this.performRitual(CONSTANTS.RITUAL.HARVEST_DANCE, village.id);
+      }
     }
 
     // Apply season moodMod to villagers at season start
@@ -1377,41 +1440,54 @@ class Game {
       }
     }
 
-    // Daily chronicle summary
-    const totalMood = this.villagers.reduce((sum, v) => sum + v.mood, 0);
-    const avgMood = totalMood / this.villagers.length;
-    const moodDesc = avgMood > 50 ? 'prosperous' : avgMood > 0 ? 'steady' : 'troubled';
+    // Daily chronicle summary — one entry per tribe
+    for (const village of this.villages) {
+      const villageVillagers = this.getVillagersForVillage(village.id);
+      if (villageVillagers.length === 0) continue;
 
-    // Find most notable villager
-    const chieftan = this.villagers.find(v => v.isChieftan);
-    const notableVillager = this.villagers.reduce((prev, curr) =>
-      curr.mood > prev.mood ? curr : prev, this.villagers[0]);
+      const totalMood = villageVillagers.reduce((sum, v) => sum + v.mood, 0);
+      const avgMood = totalMood / villageVillagers.length;
+      const moodDesc = avgMood > 50 ? 'prosperous' : avgMood > 0 ? 'steady' : 'troubled';
+      const notableVillager = villageVillagers.reduce((prev, curr) =>
+        curr.mood > prev.mood ? curr : prev, villageVillagers[0]);
 
-    this.addChronicleEntry(`Day ${this.timeState.day} dawns over a ${moodDesc} village. The people wake with hope.`);
+      this.addChronicleEntry(
+        `Day ${this.timeState.day} dawns over ${village.name}, a ${moodDesc} tribe. The people wake with hope.`,
+        'normal',
+        village.id
+      );
 
-    // Add resource status occasionally
-    if (this.timeState.day % 3 === 0) {
-      const foodStatus = (this.getResources().food || 0) < 10 ? 'is scarce' : 'is plentiful';
-      this.addChronicleEntry(`The village granary ${foodStatus}. ${this.villagers.length} souls call Simville home.`);
-    }
+      if (this.timeState.day % 3 === 0) {
+        const villageResources = this.getResources(village.id);
+        const foodStatus = (villageResources.food || 0) < 10 ? 'is scarce' : 'is plentiful';
+        this.addChronicleEntry(
+          `The granary of ${village.name} ${foodStatus}. ${villageVillagers.length} souls call this tribe home.`,
+          'normal',
+          village.id
+        );
+      }
 
-    if (this.timeState.day % 7 === 0 &&
-        this.villagers.length + this.getExpectedBirthCount() >= this.getPopulationCapacity()) {
-      this.addChronicleEntry('Families are filling the available huts. More housing will let the village keep growing.');
-    }
+      const villageCapacity = this.getPopulationCapacity(village.id);
+      if (this.timeState.day % 7 === 0 &&
+          villageVillagers.length + this.getExpectedBirthCount(village.id) >= villageCapacity) {
+        this.addChronicleEntry(
+          `Families are filling the huts of ${village.name}. More housing will let the tribe keep growing.`,
+          'normal',
+          village.id
+        );
+      }
 
-    // Add villager highlight every 5 days
-    if (this.timeState.day % 5 === 0 && notableVillager) {
-      const mood = notableVillager.mood > 50 ? 'in high spirits' : notableVillager.mood > 0 ? 'content' : 'troubled';
-      this.addChronicleEntry(`${notableVillager.name} has been seen ${mood} lately.`);
-    }
+      if (this.timeState.day % 5 === 0 && notableVillager) {
+        const mood = notableVillager.mood > 50 ? 'in high spirits' : notableVillager.mood > 0 ? 'content' : 'troubled';
+        this.addChronicleEntry(`${notableVillager.name} of ${village.name} has been seen ${mood} lately.`, 'normal', village.id);
+      }
 
-    // Prayer for Rain during Deep Dry when water is scarce
-    if (this.timeState.season?.name === CONSTANTS.SEASON.DEEP_DRY.name) {
-      const water = this.getResources().water || 0;
-      const waterCritical = water < Math.max(8, this.villagers.length * 3);
-      if (waterCritical && Math.random() < 0.35) {
-        this.performRitual(CONSTANTS.RITUAL.PRAYER_FOR_RAIN);
+      if (this.timeState.season?.name === CONSTANTS.SEASON.DEEP_DRY.name) {
+        const water = this.getResources(village.id).water || 0;
+        const waterCritical = water < Math.max(8, villageVillagers.length * 3);
+        if (waterCritical && Math.random() < 0.35) {
+          this.performRitual(CONSTANTS.RITUAL.PRAYER_FOR_RAIN, village.id);
+        }
       }
     }
 
@@ -1732,22 +1808,36 @@ class Game {
       waterReserve >= this.villagers.length * 0.8;
   }
 
-  getPopulationCapacity() {
+  getPopulationCapacity(villageId = null) {
+    const hutCapacityFor = (structure) => {
+      if (villageId) {
+        const village = this.getVillage(villageId);
+        if (!village?.structureIds.includes(structure.id)) return 0;
+      }
+      if (structure.type !== 'hut') return 0;
+      return CONSTANTS.STRUCTURE.HUT.capacity || 2;
+    };
+
     const hutCapacity = this.world?.structures
-      ?.filter(structure => structure.type === 'hut')
-      .reduce((sum, structure) => {
-        const hut = CONSTANTS.STRUCTURE.HUT;
-        return sum + (hut.capacity || 2);
-      }, 0) || 0;
+      ?.reduce((sum, structure) => sum + hutCapacityFor(structure), 0) || 0;
     const pendingHutCapacity = this.constructionProjects
-      ?.filter(project => project.type === 'hut')
+      ?.filter(project => {
+        if (project.type !== 'hut') return false;
+        if (!villageId) return true;
+        return project.villageId === villageId;
+      })
       .reduce((sum) => sum + (CONSTANTS.STRUCTURE.HUT.capacity || 2), 0) || 0;
     return 6 + hutCapacity + pendingHutCapacity;
   }
 
-  getExpectedBirthCount() {
-    const pregnancies = this.villagers.filter(v => v.expectingChild).length;
-    const queuedBirths = this.eventQueue.filter(event => event.type === 'birth').length;
+  getExpectedBirthCount(villageId = null) {
+    const villagers = villageId ? this.getVillagersForVillage(villageId) : this.villagers;
+    const pregnancies = villagers.filter(v => v.expectingChild).length;
+    const queuedBirths = this.eventQueue.filter(event => {
+      if (event.type !== 'birth') return false;
+      if (!villageId) return true;
+      return event.villager?.villageId === villageId || event.parent?.villageId === villageId;
+    }).length;
     return pregnancies + queuedBirths;
   }
 
@@ -1792,15 +1882,6 @@ class Game {
 
   produceStructureResources() {
     const seasonName = this.timeState.season?.name;
-    let farmMultiplier = seasonName === 'Harvest Season' ? 1.5 :
-      seasonName === 'Deep Dry' ? 0.5 :
-      seasonName === 'Dry Season' ? 0.8 : 1;
-    let wellMultiplier = seasonName === 'Deep Dry' ? 0.6 :
-      seasonName === 'Dry Season' ? 0.8 : 1.1;
-
-    // Tech unlocks: agriculture boosts farms; water_management boosts wells
-    if (this.hasTech('agriculture')) farmMultiplier *= 1.2;
-    if (this.hasTech('water_management')) wellMultiplier *= 1.25;
 
     // Credit yields to the village that owns each structure
     for (const structure of this.world?.structures || []) {
@@ -1808,13 +1889,22 @@ class Game {
         || this.villages[0];
       const villageId = owner?.id || null;
 
+      let farmMultiplier = seasonName === 'Harvest Season' ? 1.5 :
+        seasonName === 'Deep Dry' ? 0.5 :
+        seasonName === 'Dry Season' ? 0.8 : 1;
+      let wellMultiplier = seasonName === 'Deep Dry' ? 0.6 :
+        seasonName === 'Dry Season' ? 0.8 : 1.1;
+
+      if (this.hasTech('agriculture', villageId)) farmMultiplier *= 1.2;
+      if (this.hasTech('water_management', villageId)) wellMultiplier *= 1.25;
+
       if (structure.type === 'farm') {
         this.addResource(CONSTANTS.RESOURCE.FOOD, Math.round(6 * farmMultiplier), villageId);
         this.addResource(CONSTANTS.RESOURCE.THATCH, Math.round(2 * farmMultiplier), villageId);
       } else if (structure.type === 'well') {
         this.addResource(CONSTANTS.RESOURCE.WATER, Math.round(18 * wellMultiplier), villageId);
       } else if (structure.type === 'workshop') {
-        const craftBonus = this.hasTech('tool_crafting') ? 2 : 1;
+        const craftBonus = this.hasTech('tool_crafting', villageId) ? 2 : 1;
         this.addResource(CONSTANTS.RESOURCE.WOOD, craftBonus, villageId);
         this.addResource(CONSTANTS.RESOURCE.STONE, craftBonus, villageId);
       }
@@ -3024,7 +3114,7 @@ class Game {
   }
 
   harvestResourceNode(villager, resource, skillLevel = 1) {
-    const bonusSkill = skillLevel * this.getGatherTechMultiplier(resource.type);
+    const bonusSkill = skillLevel * this.getGatherTechMultiplier(resource.type, villager.villageId);
     const gathered = this.world.harvestResource(resource.id, Math.max(1, bonusSkill));
     if (gathered <= 0) return 0;
 
@@ -3034,19 +3124,19 @@ class Game {
     return gathered;
   }
 
-  getGatherTechMultiplier(resourceType) {
+  getGatherTechMultiplier(resourceType, villageId = null) {
     let mult = 1;
-    if (this.hasTech('agriculture') &&
+    if (this.hasTech('agriculture', villageId) &&
         (resourceType === CONSTANTS.RESOURCE.FOOD || resourceType === CONSTANTS.RESOURCE.THATCH)) {
       mult *= 1.15;
     }
-    if (this.hasTech('hunting_techniques') && resourceType === CONSTANTS.RESOURCE.FOOD) {
+    if (this.hasTech('hunting_techniques', villageId) && resourceType === CONSTANTS.RESOURCE.FOOD) {
       mult *= 1.1;
     }
-    if (this.hasTech('fishing_methods') && resourceType === CONSTANTS.RESOURCE.FISH) {
+    if (this.hasTech('fishing_methods', villageId) && resourceType === CONSTANTS.RESOURCE.FISH) {
       mult *= 1.2;
     }
-    if (this.hasTech('tool_crafting')) {
+    if (this.hasTech('tool_crafting', villageId)) {
       mult *= 1.05;
     }
     return mult;
@@ -3067,7 +3157,7 @@ class Game {
     }
 
     if (resource) {
-      const skillLevel = (villager.skills.gathering || 1) * this.getGatherTechMultiplier(resourceType);
+      const skillLevel = (villager.skills.gathering || 1) * this.getGatherTechMultiplier(resourceType, villager.villageId);
       const gathered = this.world.harvestResource(resource.id, skillLevel);
 
       if (gathered > 0) {
@@ -3181,8 +3271,8 @@ class Game {
       builtBy: builder.id
     });
 
-    this.chronicle.stats.structuresBuilt++;
-    this.addChronicleEntry(`${builder.name} led the construction of a new ${struct.name}!`);
+    this.incrementChronicleStat('structuresBuilt', builder.villageId);
+    this.addChronicleEntry(`${builder.name} led the construction of a new ${struct.name}!`, 'normal', builder.villageId);
     builder.showSpeechBubble('🏠', `Building ${struct.name}`);
 
     // Update UI
@@ -3190,66 +3280,66 @@ class Game {
   }
 
   async performChieftanMeeting() {
-    const chieftan = this.villagers.find(v => v.isChieftan);
+    for (const village of this.villages) {
+      await this.performVillageChieftanMeeting(village);
+    }
+  }
+
+  async performVillageChieftanMeeting(village) {
+    const chieftan = village.getChieftan(this.villagers);
     if (!chieftan) return;
 
-    // Find communal fire location
-    const fire = this.world.structures.find(s => s.type === 'fire');
-    const meetingLocation = fire || { x: this.world.villageCenter.x, y: this.world.villageCenter.y };
+    const villageVillagers = this.getVillagersForVillage(village.id);
+    const fire = this.world.structures.find(s => s.type === 'fire' && village.structureIds.includes(s.id));
+    const meetingLocation = fire || village.center;
 
-    // Move chieftan to fire
     chieftan.moveTo(meetingLocation.x, meetingLocation.y, this.world);
 
-    // Generate meeting guidance from LLM
-    const meetingGuidance = await this.generateChieftanGuidance();
+    const meetingGuidance = await this.generateChieftanGuidance(village.id);
 
-    // Record the meeting in chronicle
-    this.addChronicleEntry(`As night falls, ${chieftan.name} gathers the tribe around the fire.`);
+    this.addChronicleEntry(
+      `As night falls, ${chieftan.name} gathers the people of ${village.name} around the fire.`,
+      'normal',
+      village.id
+    );
 
-    // Chieftan gives speech bubble
-    chieftan.showSpeechBubble('👑', 'Leading the tribe');
+    chieftan.showSpeechBubble('👑', `Leading ${village.name}`);
 
-    // Apply guidance effects
     if (meetingGuidance) {
       if (meetingGuidance.focus === 'food') {
-        this.addChronicleEntry(`${chieftan.name}'s words stir the hunters. The village will focus on gathering food.`);
-        // Boost hunting motivation
-        this.villagers.forEach(v => {
+        this.addChronicleEntry(`${chieftan.name}'s words stir the hunters of ${village.name}. The tribe will focus on gathering food.`, 'normal', village.id);
+        villageVillagers.forEach(v => {
           if (v.skills.hunting >= 5) {
             v.mood = Math.min(100, v.mood + 5);
           }
         });
       } else if (meetingGuidance.focus === 'building') {
-        this.addChronicleEntry(`${chieftan.name} speaks of progress. The village will prioritize construction.`);
-        // Boost building motivation
-        this.villagers.forEach(v => {
+        this.addChronicleEntry(`${chieftan.name} speaks of progress for ${village.name}. Construction will be prioritized.`, 'normal', village.id);
+        villageVillagers.forEach(v => {
           if (v.skills.crafting >= 5) {
             v.mood = Math.min(100, v.mood + 5);
           }
         });
       } else if (meetingGuidance.focus === 'harmony') {
-        this.addChronicleEntry(`${chieftan.name} speaks of unity. The tribe strengthen their bonds.`);
-        // Boost social relationships
-        this.villagers.forEach(v => {
+        this.addChronicleEntry(`${chieftan.name} speaks of unity among the people of ${village.name}.`, 'normal', village.id);
+        villageVillagers.forEach(v => {
           v.socialNeed = Math.min(100, v.socialNeed + 15);
         });
       } else if (meetingGuidance.focus === 'rest') {
-        this.addChronicleEntry(`${chieftan.name} calls for rest. The tribe will conserve their strength.`);
-        // Everyone recovers energy
-        this.villagers.forEach(v => {
+        this.addChronicleEntry(`${chieftan.name} calls for rest among the people of ${village.name}.`, 'normal', village.id);
+        villageVillagers.forEach(v => {
           v.energy = Math.min(100, v.energy + 10);
         });
       }
 
       if (meetingGuidance.rule) {
-        this.enactChieftanRule(meetingGuidance.rule, chieftan, meetingGuidance.focus);
-      } else if (this.shouldCreateFallbackRule()) {
-        this.enactChieftanRule(this.createFallbackRule(meetingGuidance.focus), chieftan, meetingGuidance.focus);
+        this.enactChieftanRule(meetingGuidance.rule, chieftan, meetingGuidance.focus, village.id);
+      } else if (this.shouldCreateFallbackRule(village.id)) {
+        this.enactChieftanRule(this.createFallbackRule(meetingGuidance.focus), chieftan, meetingGuidance.focus, village.id);
       }
     }
 
-    // Everyone gathers (move villagers towards fire if nearby)
-    this.villagers.forEach(v => {
+    villageVillagers.forEach(v => {
       if (v.id !== chieftan.id && v.status !== 'sleeping') {
         const dist = Utils.distance(v.x, v.y, meetingLocation.x, meetingLocation.y);
         if (dist < 10) {
@@ -3260,8 +3350,8 @@ class Game {
     });
   }
 
-  shouldCreateFallbackRule() {
-    const government = this.getGovernment();
+  shouldCreateFallbackRule(villageId = null) {
+    const government = this.getGovernment(villageId);
     const daysSinceRule = this.timeState.day - (government?.lastRuleDay || 0);
     return daysSinceRule >= 4 && Math.random() < 0.55;
   }
@@ -3361,30 +3451,33 @@ class Game {
     }
   }
 
-  async generateChieftanGuidance() {
+  async generateChieftanGuidance(villageId = null) {
+    const village = this.getVillage(villageId) || this.getSelectedVillage();
+    const chieftan = village?.getChieftan(this.villagers);
+    const villageVillagers = village ? this.getVillagersForVillage(village.id) : this.villagers;
+
     if (!llm.config?.llm?.apiKey) {
-      // Fallback guidance without LLM
       const focuses = ['food', 'building', 'harmony', 'rest'];
       const focus = focuses[Math.floor(Math.random() * focuses.length)];
       return {
         focus,
-        rule: this.shouldCreateFallbackRule() ? this.createFallbackRule(focus) : null
+        rule: this.shouldCreateFallbackRule(village?.id) ? this.createFallbackRule(focus) : null
       };
     }
 
     try {
-      const hudResources = this.getHudResources();
-      const prompt = `The chieftan ${this.villagers.find(v => v.isChieftan)?.name || 'Kana'} must give guidance to the village.
+      const villageResources = village ? this.getResources(village.id) : this.getHudResources();
+      const prompt = `The chieftan ${chieftan?.name || 'Kana'} must give guidance to the tribe of ${village?.name || 'the village'}.
 
 Current state:
-- Population: ${this.villagers.length} villagers
-- Food: ${hudResources.food || 0}
-- Wood: ${hudResources.wood || 0}
-- Stone: ${hudResources.stone || 0}
-- Village mood: ${this.villagers.reduce((sum, v) => sum + v.mood, 0) / this.villagers.length}
+- Population: ${villageVillagers.length} villagers
+- Food: ${villageResources.food || 0}
+- Wood: ${villageResources.wood || 0}
+- Stone: ${villageResources.stone || 0}
+- Village mood: ${villageVillagers.reduce((sum, v) => sum + v.mood, 0) / Math.max(1, villageVillagers.length)}
 - Day: ${this.timeState.day}
-- Structures: ${this.world.structures.length}
-- Active rules: ${this.getActiveRules().map(rule => `${rule.title}: ${rule.edict}`).join('; ') || 'none'}
+- Structures: ${village?.structureIds.length || 0}
+- Active rules: ${this.getActiveRules(village?.id).map(rule => `${rule.title}: ${rule.edict}`).join('; ') || 'none'}
 
 What should the village focus on tomorrow? Choose one:
 - food: if food is low or hunters need motivation
@@ -3454,10 +3547,9 @@ Respond with JSON: {
     if (this.villagers.some(v => v.id === newVillager.id)) return;
 
     this.villagers.push(newVillager);
-    this.chronicle.stats.births++;
-
+    this.incrementChronicleStat('births', newVillager.villageId);
     const parentNames = newVillager.parentNames?.join(' and ') || 'the village';
-    this.addChronicleEntry(`${newVillager.name} has been born to ${parentNames}!`, 'celebration');
+    this.addChronicleEntry(`${newVillager.name} has been born to ${parentNames}!`, 'celebration', newVillager.villageId);
     newVillager.showSpeechBubble('👶', 'Newborn', 6000);
     newVillager.parentNames?.forEach(parentName => {
       const parent = this.villagers.find(v => v.name === parentName);
@@ -3465,21 +3557,20 @@ Respond with JSON: {
     });
 
     // Name ceremony
-    this.performRitual(CONSTANTS.RITUAL.NAME_CEREMONY);
+    this.performRitual(CONSTANTS.RITUAL.NAME_CEREMONY, newVillager.villageId);
   }
 
   handleDeath(villager) {
-    this.chronicle.stats.deaths++;
-
+    this.incrementChronicleStat('deaths', villager.villageId);
     const isLegendary = villager.isChieftan || villager.mood > 80;
     const causeText = villager.causeOfDeath ? ` (${villager.causeOfDeath})` : '';
     const leaderText = villager.isChieftan ? 'The village mourns its leader.' : 'They will be remembered.';
     const chronicleText = `${villager.name} has passed away${causeText}. ${leaderText}`;
 
-    this.addChronicleEntry(chronicleText, isLegendary ? 'legendary' : 'normal');
+    this.addChronicleEntry(chronicleText, isLegendary ? 'legendary' : 'normal', villager.villageId);
 
     if (isLegendary) {
-      this.addLegendaryEntry(`${villager.name}'s Legacy`, chronicleText);
+      this.addLegendaryEntry(`${villager.name}'s Legacy`, chronicleText, villager.villageId);
     }
 
     const partner = this.villagers.find(v => v.id === villager.partnerId);
@@ -3507,7 +3598,7 @@ Respond with JSON: {
     }
 
     // Funeral ritual
-    this.performRitual(CONSTANTS.RITUAL.FUNERAL);
+    this.performRitual(CONSTANTS.RITUAL.FUNERAL, villager.villageId);
   }
 
   // Remove villager without funeral (for raids, conquest, etc.)
@@ -3532,7 +3623,8 @@ Respond with JSON: {
   handleMarriage(villager1, villager2) {
     if (!villager1 || !villager2 || villager1.partnerId || villager2.partnerId) return;
 
-    this.chronicle.stats.marriages++;
+    const marriageVillageId = villager1.villageId || villager2.villageId;
+    this.incrementChronicleStat('marriages', marriageVillageId);
     villager1.partnerId = villager2.id;
     villager1.partnerName = villager2.name;
     villager1.lastPartnershipDay = this.timeState.day;
@@ -3544,8 +3636,8 @@ Respond with JSON: {
     villager1.showSpeechBubble('😍', `Joined with ${villager2.name}`, 6000);
     villager2.showSpeechBubble('😍', `Joined with ${villager1.name}`, 6000);
 
-    this.addChronicleEntry(`${villager1.name} and ${villager2.name} have joined as one. The village celebrates their union!`, 'celebration');
-    this.performRitual(CONSTANTS.RITUAL.MARRIAGE);
+    this.addChronicleEntry(`${villager1.name} and ${villager2.name} have joined as one. The village celebrates their union!`, 'celebration', marriageVillageId);
+    this.performRitual(CONSTANTS.RITUAL.MARRIAGE, marriageVillageId);
   }
 
   handleDivorce(villager1, villager2, reason) {
@@ -3742,10 +3834,11 @@ Respond with JSON: {
     }
   }
 
-  async performRitual(ritualDef) {
+  async performRitual(ritualDef, villageId = null) {
     if (!ritualDef) return;
 
-    const participants = this.villagers.filter(v => {
+    let participants = this.villagers.filter(v => {
+      if (villageId && v.villageId !== villageId) return false;
       if (ritualDef.participants === 'all') return v.status !== CONSTANTS.ACTIVITY.SLEEPING;
       if (ritualDef.participants === 'adults') {
         return v.lifeStage !== CONSTANTS.LIFE_STAGE.CHILD && v.lifeStage !== CONSTANTS.LIFE_STAGE.YOUTH;
@@ -3793,11 +3886,12 @@ Respond with JSON: {
       const entry = chant
         ? `${ritualDef.emoji || ''} ${ritualDef.name}: ${narrationText} "${chant}"`
         : `${ritualDef.emoji || ''} ${ritualDef.name}: ${narrationText}`;
-      this.addChronicleEntry(entry.trim(), 'celebration');
+      this.addChronicleEntry(entry.trim(), 'celebration', villageId || leader?.villageId);
     } else {
       this.addChronicleEntry(
         `${ritualDef.emoji || ''} The village holds a ${ritualDef.name}.`,
-        'celebration'
+        'celebration',
+        villageId || leader?.villageId
       );
     }
 
@@ -3990,8 +4084,8 @@ Respond with JSON: {
       builder.showSpeechBubble('🏠', `${project.name} complete`, 5000);
     }
 
-    this.chronicle.stats.structuresBuilt++;
-    this.addChronicleEntry(`A new ${project.name} now stands in the village.`, 'celebration');
+    this.incrementChronicleStat('structuresBuilt', project.villageId || builder?.villageId);
+    this.addChronicleEntry(`A new ${project.name} now stands in the village.`, 'celebration', project.villageId || builder?.villageId);
     this.ui.showToast(`${project.name} built!`);
   }
 
@@ -4017,36 +4111,46 @@ Respond with JSON: {
 
   // Technology Research System
   processTechResearch(deltaTime) {
-    if (!this.techState.currentResearch) return;
-
-    const { techId, progress, startDay } = this.techState.currentResearch;
-    const tech = CONSTANTS.TECH[techId];
-    if (!tech) {
-      this.techState.currentResearch = null;
-      return;
-    }
-
-    // Calculate progress based on research speed and time
-    const researchPerMs = (1 / (tech.researchTime * this.timeState.dayDuration)) * this.techState.researchSpeed;
-    this.techState.currentResearch.progress += deltaTime * researchPerMs;
-
-    // Check if research complete
-    if (this.techState.currentResearch.progress >= 1) {
-      this.completeTechResearch(tech);
+    for (const village of this.villages) {
+      this.processVillageTechResearch(village, deltaTime);
     }
   }
 
-  completeTechResearch(tech) {
-    if (!this.techState.researched.includes(tech.id)) {
-      this.techState.researched.push(tech.id);
+  processVillageTechResearch(village, deltaTime) {
+    const techState = village.techState;
+    if (!techState?.currentResearch) return;
+
+    const { techId } = techState.currentResearch;
+    const tech = CONSTANTS.TECH[techId];
+    if (!tech) {
+      techState.currentResearch = null;
+      return;
     }
-    this.techState.currentResearch = null;
 
-    this.addChronicleEntry(`The village has discovered: ${tech.name}!`, 'celebration');
-    this.ui.showToast(`New Technology: ${tech.name}!`);
+    const researchPerMs = (1 / (tech.researchTime * this.timeState.dayDuration)) * techState.researchSpeed;
+    techState.currentResearch.progress += deltaTime * researchPerMs;
 
-    // Log the discovery in chronicle legendary
-    this.chronicle.legendary.unshift({
+    if (techState.currentResearch.progress >= 1) {
+      this.completeTechResearch(tech, village.id);
+    }
+  }
+
+  completeTechResearch(tech, villageId) {
+    const village = this.getVillage(villageId);
+    if (!village) return;
+    const techState = village.techState;
+
+    if (!techState.researched.includes(tech.id)) {
+      techState.researched.push(tech.id);
+    }
+    techState.currentResearch = null;
+
+    this.addChronicleEntry(`${village.name} has discovered: ${tech.name}!`, 'celebration', village.id);
+    if (this.getSelectedVillage()?.id === village.id) {
+      this.ui.showToast(`New Technology: ${tech.name}!`);
+    }
+
+    village.chronicle.legendary.unshift({
       day: this.timeState.day,
       text: `Discovered ${tech.name}: ${tech.description}`
     });
@@ -4054,16 +4158,25 @@ Respond with JSON: {
   }
 
   async requestTechDecision() {
-    // Skip if no LLM or paused
+    for (const village of this.villages) {
+      await this.requestVillageTechDecision(village);
+    }
+  }
+
+  async requestVillageTechDecision(village) {
     if (this.paused || !llm.config?.llm?.apiKey) return;
 
+    const villageVillagers = this.getVillagersForVillage(village.id);
     const worldState = {
-      resources: this.getHudResources(),
-      structures: this.world.structures.map(s => ({ type: s.type, x: s.x, y: s.y })),
-      population: this.villagers.length,
+      resources: this.getResources(village.id),
+      structures: this.world.structures
+        .filter(s => village.structureIds.includes(s.id))
+        .map(s => ({ type: s.type, x: s.x, y: s.y })),
+      population: villageVillagers.length,
       day: this.timeState.day,
       timeOfDay: Utils.getTimeOfDay(this.timeState.hours),
-      season: this.timeState.season.name
+      season: this.timeState.season.name,
+      villageName: village.name
     };
 
     const timeState = {
@@ -4073,101 +4186,108 @@ Respond with JSON: {
       dayInSeason: this.timeState.dayInSeason
     };
 
-    try {
-      const decision = await llm.generateTechDecision(worldState, this.techState, timeState);
+    const techState = village.techState;
 
+    try {
+      const decision = await llm.generateTechDecision(worldState, techState, timeState);
       if (!decision) return;
 
-      // Log the decision reason
       if (decision.reason) {
-        console.log(`Tech decision: ${decision.decision} - ${decision.reason}`);
+        console.log(`Tech decision for ${village.name}: ${decision.decision} - ${decision.reason}`);
       }
 
-      // Handle the decision
       if (decision.decision === 'switch' && decision.techId) {
-        // Switch to new technology, cancelling current research
-        const oldResearch = this.techState.currentResearch?.techId;
-        this.startTechResearch(decision.techId);
+        const oldResearch = techState.currentResearch?.techId;
+        this.startTechResearch(decision.techId, village.id);
         if (oldResearch) {
-          this.addChronicleEntry(`The village shifts focus from ${CONSTANTS.TECH[oldResearch]?.name || oldResearch} to ${CONSTANTS.TECH[decision.techId]?.name || decision.techId}.`);
+          this.addChronicleEntry(
+            `${village.name} shifts focus from ${CONSTANTS.TECH[oldResearch]?.name || oldResearch} to ${CONSTANTS.TECH[decision.techId]?.name || decision.techId}.`,
+            'normal',
+            village.id
+          );
         }
-      } else if (decision.decision === 'start_new' && decision.techId && !this.techState.currentResearch) {
-        // Start new research when nothing is ongoing
-        this.startTechResearch(decision.techId);
-        this.addChronicleEntry(`The village begins researching ${CONSTANTS.TECH[decision.techId]?.name || decision.techId}.`);
-      } else if (decision.decision === 'continue' && this.techState.currentResearch) {
-        // Continue current research - just log occasionally
-        const tech = CONSTANTS.TECH[this.techState.currentResearch.techId];
+      } else if (decision.decision === 'start_new' && decision.techId && !techState.currentResearch) {
+        this.startTechResearch(decision.techId, village.id);
+        this.addChronicleEntry(
+          `${village.name} begins researching ${CONSTANTS.TECH[decision.techId]?.name || decision.techId}.`,
+          'normal',
+          village.id
+        );
+      } else if (decision.decision === 'continue' && techState.currentResearch) {
+        const tech = CONSTANTS.TECH[techState.currentResearch.techId];
         if (tech && Math.random() < 0.3) {
-          const progress = Math.round(this.techState.currentResearch.progress * 100);
-          this.addChronicleEntry(`The village continues researching ${tech.name} (${progress}% complete).`);
+          const progress = Math.round(techState.currentResearch.progress * 100);
+          this.addChronicleEntry(
+            `${village.name} continues researching ${tech.name} (${progress}% complete).`,
+            'normal',
+            village.id
+          );
         }
       }
     } catch (error) {
-      console.error('Tech decision error:', error);
+      console.error(`Tech decision error for ${village.name}:`, error);
     }
   }
 
-  getAvailableTechs() {
+  getAvailableTechs(villageId = null) {
+    const techState = this.getTechState(villageId);
     const available = [];
     for (const [key, tech] of Object.entries(CONSTANTS.TECH)) {
-      if (this.techState.researched.includes(tech.id)) continue;
-      if (this.techState.currentResearch?.techId === tech.id) continue;
-
-      // Check prerequisites
-      const prereqsMet = tech.prerequisites.every(p => this.techState.researched.includes(p));
+      if (techState.researched.includes(tech.id)) continue;
+      if (techState.currentResearch?.techId === tech.id) continue;
+      const prereqsMet = tech.prerequisites.every(p => techState.researched.includes(p));
       if (!prereqsMet) continue;
-
       available.push(tech);
     }
     return available;
   }
 
-  startTechResearch(techId) {
+  startTechResearch(techId, villageId = null) {
+    const village = this.getVillage(villageId) || this.getSelectedVillage();
+    if (!village) return false;
+    const techState = village.techState;
     const tech = CONSTANTS.TECH[techId];
     if (!tech) return false;
-
-    // Check if already researched
-    if (this.techState.researched.includes(techId)) return false;
-
-    // Check prerequisites
-    const prereqsMet = tech.prerequisites.every(p => this.techState.researched.includes(p));
+    if (techState.researched.includes(techId)) return false;
+    const prereqsMet = tech.prerequisites.every(p => techState.researched.includes(p));
     if (!prereqsMet) return false;
 
-    // Start new research (cancel any current)
-    this.techState.currentResearch = {
+    techState.currentResearch = {
       techId,
       progress: 0,
       startDay: this.timeState.day
     };
 
-    this.addChronicleEntry(`Research has begun on ${tech.name}...`);
+    this.addChronicleEntry(`Research has begun on ${tech.name} in ${village.name}...`, 'normal', village.id);
     return true;
   }
 
-  getTechResearchProgress() {
-    if (!this.techState.currentResearch) return null;
-    const tech = CONSTANTS.TECH[this.techState.currentResearch.techId];
+  getTechResearchProgress(villageId = null) {
+    const techState = this.getTechState(villageId);
+    if (!techState.currentResearch) return null;
+    const tech = CONSTANTS.TECH[techState.currentResearch.techId];
     return {
       tech,
-      progress: this.techState.currentResearch.progress,
-      percent: Math.round(this.techState.currentResearch.progress * 100)
+      progress: techState.currentResearch.progress,
+      percent: Math.round(techState.currentResearch.progress * 100)
     };
   }
 
-  getResearchedTechs() {
-    return this.techState.researched
+  getResearchedTechs(villageId = null) {
+    const techState = this.getTechState(villageId);
+    return techState.researched
       .map(id => CONSTANTS.TECH[id] || Object.values(CONSTANTS.TECH).find(t => t.id === id))
       .filter(Boolean);
   }
 
-  hasTech(techId) {
+  hasTech(techId, villageId = null) {
     if (!techId) return false;
-    if (this.techState.researched.includes(techId)) return true;
+    const techState = this.getTechState(villageId);
+    if (techState.researched.includes(techId)) return true;
     const tech = CONSTANTS.TECH[techId] ||
       Object.values(CONSTANTS.TECH).find(t => t.id === techId);
     if (!tech) return false;
-    return this.techState.researched.includes(tech.id);
+    return techState.researched.includes(tech.id);
   }
 
   getStructureDefById(structureId) {
@@ -4252,33 +4372,45 @@ Respond with JSON: {
     return null;
   }
 
-  addChronicleEntry(text, type = 'normal') {
+  incrementChronicleStat(stat, villageId) {
+    const village = this.getVillage(villageId);
+    if (village?.chronicle?.stats && stat in village.chronicle.stats) {
+      village.chronicle.stats[stat]++;
+    }
+  }
+
+  addChronicleEntry(text, type = 'normal', villageId = null) {
     if (this.benchmarkMode) return;
+    const resolvedId = villageId || this.hudVillageId || this.villages[0]?.id;
+    const village = this.getVillage(resolvedId);
+    if (!village) return;
+
     const entry = {
       text,
       day: this.timeState.day,
       type
     };
 
-    this.chronicle.entries.unshift(entry);
+    village.chronicle.entries.unshift(entry);
     this.chronicleDirty = true;
 
-    // Keep only last 100 entries
-    if (this.chronicle.entries.length > 100) {
-      this.chronicle.entries.pop();
+    if (village.chronicle.entries.length > 100) {
+      village.chronicle.entries.pop();
     }
 
-    // Fire-and-forget LLM enrichment for legendary/celebration (don't block game loop)
     if (type === 'legendary' || type === 'celebration') {
-      this.enrichChronicleEntry(entry).catch(() => {});
+      this.enrichChronicleEntry(entry, village.id).catch(() => {});
     }
   }
 
-  async enrichChronicleEntry(entry) {
+  async enrichChronicleEntry(entry, villageId = null) {
     if (!entry || typeof llm?.generateChronicleEntry !== 'function') return;
 
-    const avgMood = this.villagers.length
-      ? this.villagers.reduce((sum, v) => sum + (v.mood || 0), 0) / this.villagers.length
+    const villageVillagers = villageId
+      ? this.getVillagersForVillage(villageId)
+      : this.villagers;
+    const avgMood = villageVillagers.length
+      ? villageVillagers.reduce((sum, v) => sum + (v.mood || 0), 0) / villageVillagers.length
       : 0;
 
     try {
@@ -4295,17 +4427,20 @@ Respond with JSON: {
     }
   }
 
-  addLegendaryEntry(title, text) {
-    this.chronicle.legendary.unshift({
+  addLegendaryEntry(title, text, villageId = null) {
+    const resolvedId = villageId || this.hudVillageId || this.villages[0]?.id;
+    const village = this.getVillage(resolvedId);
+    if (!village) return;
+
+    village.chronicle.legendary.unshift({
       title,
       text,
       day: this.timeState.day
     });
     this.chronicleDirty = true;
 
-    // Keep only last 20 legends
-    if (this.chronicle.legendary.length > 20) {
-      this.chronicle.legendary.pop();
+    if (village.chronicle.legendary.length > 20) {
+      village.chronicle.legendary.pop();
     }
   }
 
@@ -4336,6 +4471,14 @@ Respond with JSON: {
       this.graphicsSettings.showLabels,
       this.weather
     );
+
+    // Render territory overlays for each tribe
+    if (this.villages.length > 0) {
+      this.worldRenderer.renderTerritories(
+        this.villages,
+        this.getSelectedVillage()?.id || null
+      );
+    }
 
     this.constructionProjects.forEach(project => {
       this.worldRenderer.renderConstructionProject(project);
@@ -4368,10 +4511,11 @@ Respond with JSON: {
       villagers: this.villagers.map(v => v.serialize()),
       villages: this.villages.map(v => v.serialize()),
       timeState: this.timeState,
-      chronicle: this.chronicle,
       constructionProjects: this.constructionProjects,
       graphicsSettings: this.graphicsSettings,
-      techState: this.techState,
+      // Legacy top-level chronicle/tech for older save loaders
+      chronicle: this.villages[0]?.chronicle || null,
+      techState: this.villages[0]?.techState || null,
       activeRaid: this.activeRaid,
       diplomaticEvents: this.diplomaticEvents,
       nextChieftanDecision: this.nextChieftanDecision,
@@ -4447,8 +4591,22 @@ Respond with JSON: {
       // Restore time
       this.timeState = saveData.timeState;
 
-      // Restore chronicle
-      this.chronicle = saveData.chronicle;
+      // Restore per-village chronicle/tech (migrate legacy global saves)
+      this.villages.forEach((village, index) => {
+        if (!village.chronicle) {
+          village.chronicle = index === 0 && saveData.chronicle
+            ? saveData.chronicle
+            : village.createDefaultChronicle();
+        }
+        if (!village.techState) {
+          village.techState = index === 0 && saveData.techState
+            ? saveData.techState
+            : village.createDefaultTechState();
+        }
+        if (village.displayIndex == null) {
+          village.displayIndex = index;
+        }
+      });
       this.chronicleDirty = true;
       this.constructionProjects = saveData.constructionProjects || [];
       this.constructionAccumulator = 0;
@@ -4458,22 +4616,20 @@ Respond with JSON: {
         this.graphicsSettings = saveData.graphicsSettings;
       }
 
-      // Restore tech state
-      if (saveData.techState) {
-        this.techState = saveData.techState;
-      } else {
-        this.techState = { researched: [], currentResearch: null, researchSpeed: 1 };
-      }
-
       // Restore inter-village state
       this.activeRaid = saveData.activeRaid || null;
       this.diplomaticEvents = saveData.diplomaticEvents || [];
       this.nextChieftanDecision = saveData.nextChieftanDecision || {};
       this.hostileDaysCount = saveData.hostileDaysCount || {};
       this.hudVillageId = saveData.hudVillageId || this.villages[0]?.id || null;
+      this.ui?.updateTribeSelector?.(this.villages, this.hudVillageId);
 
-      // Center camera on first village
-      this.worldRenderer.centerOn(this.world.villageCenters[0]?.x || this.world.size / 2, this.world.villageCenters[0]?.y || this.world.size / 2);
+      // Center camera on selected tribe
+      const focusVillage = this.getSelectedVillage();
+      this.worldRenderer.centerOn(
+        focusVillage?.center.x || this.world.villageCenters[0]?.x || this.world.size / 2,
+        focusVillage?.center.y || this.world.villageCenters[0]?.y || this.world.size / 2
+      );
 
       this.ui.showToast('Game loaded!');
     } catch (e) {
