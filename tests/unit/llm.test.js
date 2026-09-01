@@ -133,4 +133,36 @@ describe('LLMManager', () => {
       { role: 'assistant', content: '{"ok":true}' }
     ]);
   });
+
+  it('getRequestTimeoutMs uses a longer timeout for local endpoints', () => {
+    manager.config.llm.endpoint = 'http://localhost:1234/v1';
+    expect(manager.getRequestTimeoutMs()).toBe(120000);
+    manager.config.llm.endpoint = 'https://api.openai.com/v1';
+    expect(manager.getRequestTimeoutMs()).toBe(30000);
+  });
+
+  it('enqueueRequest serializes concurrent tasks', async () => {
+    const callOrder = [];
+    let releaseFirst;
+    const firstGate = new Promise(resolve => {
+      releaseFirst = resolve;
+    });
+
+    const first = manager.enqueueRequest(async () => {
+      callOrder.push('first-start');
+      await firstGate;
+      callOrder.push('first-end');
+    });
+    const second = manager.enqueueRequest(async () => {
+      callOrder.push('second-start');
+    });
+
+    await Promise.resolve();
+    expect(callOrder).toEqual(['first-start']);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    expect(callOrder).toEqual(['first-start', 'first-end', 'second-start']);
+  });
 });
