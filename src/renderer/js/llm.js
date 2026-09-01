@@ -7,6 +7,22 @@ class LLMManager {
     this.offline = false;
     this.messageHistory = [];
     this.maxHistory = 10;
+    // Serialize API calls so local servers (LM Studio) never get overlapping requests
+    this._requestQueue = Promise.resolve();
+    this._pendingRequestCount = 0;
+  }
+
+  getRequestTimeoutMs(endpoint = this.config?.llm?.endpoint) {
+    return this.isLocalEndpoint(endpoint) ? 120000 : 30000;
+  }
+
+  enqueueRequest(task) {
+    this._pendingRequestCount += 1;
+    const run = this._requestQueue.then(() => task());
+    this._requestQueue = run.catch(() => {});
+    return run.finally(() => {
+      this._pendingRequestCount = Math.max(0, this._pendingRequestCount - 1);
+    });
   }
 
   async initialize() {
@@ -169,8 +185,13 @@ class LLMManager {
       return this.getFallbackResponse(prompt);
     }
 
+    return this.enqueueRequest(() => this.executeGenerate(prompt, systemPrompt));
+  }
+
+  async executeGenerate(prompt, systemPrompt = null) {
     const messages = this.buildChatMessages(prompt, systemPrompt);
     const userPrompt = String(prompt ?? '').trim() || 'Respond with valid JSON.';
+    const timeoutMs = this.getRequestTimeoutMs();
 
     console.log('LLM generate: Making API request to', this.config.llm.endpoint);
 
@@ -178,7 +199,7 @@ class LLMManager {
     try {
       const baseUrl = this.config.llm.endpoint.replace(/\/$/, '');
       const controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), 15000);
+      timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       const headers = {
         'Content-Type': 'application/json'
       };
@@ -223,7 +244,11 @@ class LLMManager {
       }
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
-      console.error('LLM request failed:', error);
+      if (error?.name === 'AbortError') {
+        console.warn(`LLM request timed out after ${timeoutMs}ms`);
+      } else {
+        console.error('LLM request failed:', error);
+      }
     }
 
     console.log('LLM generate: Falling back');
