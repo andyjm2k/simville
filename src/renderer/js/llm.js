@@ -33,6 +33,67 @@ class LLMManager {
     }
   }
 
+  isLocalEndpoint(endpoint = this.config?.llm?.endpoint) {
+    if (!endpoint || typeof endpoint !== 'string') return false;
+
+    try {
+      const url = new URL(endpoint.includes('://') ? endpoint : `http://${endpoint}`);
+      const host = url.hostname.toLowerCase();
+      return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1';
+    } catch (error) {
+      return /localhost|127\.0\.0\.1/i.test(endpoint);
+    }
+  }
+
+  getSanitizedHistory(limit = 6) {
+    const valid = this.messageHistory
+      .filter(message =>
+        (message.role === 'user' || message.role === 'assistant') &&
+        typeof message.content === 'string' &&
+        message.content.trim().length > 0
+      )
+      .map(message => ({ role: message.role, content: message.content.trim() }));
+
+    let history = valid.slice(-limit);
+    while (history.length > 0 && history[0].role === 'assistant') {
+      history.shift();
+    }
+
+    return history;
+  }
+
+  buildChatMessages(prompt, systemPrompt = null) {
+    const systemParts = [];
+    if (systemPrompt && String(systemPrompt).trim()) {
+      systemParts.push(String(systemPrompt).trim());
+    }
+    systemParts.push('You are the simulation engine for Simville. You must respond with valid JSON only, no markdown formatting or additional text.');
+
+    const systemText = systemParts.join('\n\n');
+    const userText = String(prompt ?? '').trim() || 'Respond with valid JSON.';
+    const history = this.getSanitizedHistory();
+    const messages = [];
+
+    if (this.isLocalEndpoint()) {
+      // LM Studio and similar local servers often use strict Jinja templates
+      // that reject multiple system messages or missing user string content.
+      messages.push(...history);
+      messages.push({
+        role: 'user',
+        content: systemText ? `${systemText}\n\n${userText}` : userText
+      });
+      return messages;
+    }
+
+    if (systemText) {
+      messages.push({ role: 'system', content: systemText });
+    }
+
+    messages.push(...history);
+    messages.push({ role: 'user', content: userText });
+    return messages;
+  }
+
   async testConnection(config = null) {
     const testConfig = config || this.config?.llm;
 
@@ -108,19 +169,8 @@ class LLMManager {
       return this.getFallbackResponse(prompt);
     }
 
-    const messages = [];
-
-    if (systemPrompt) {
-      messages.push({ role: 'system', content: systemPrompt });
-    }
-
-    messages.push({ role: 'system', content: 'You are the simulation engine for Simville. You must respond with valid JSON only, no markdown formatting or additional text.' });
-
-    // Add relevant history
-    const relevantHistory = this.messageHistory.slice(-3);
-    messages.push(...relevantHistory);
-
-    messages.push({ role: 'user', content: prompt });
+    const messages = this.buildChatMessages(prompt, systemPrompt);
+    const userPrompt = String(prompt ?? '').trim() || 'Respond with valid JSON.';
 
     console.log('LLM generate: Making API request to', this.config.llm.endpoint);
 
@@ -162,7 +212,7 @@ class LLMManager {
       console.log('LLM generate: Got response, length:', content?.length);
 
       if (content) {
-        this.addToHistory({ role: 'user', content: prompt.slice(0, 400) });
+        this.addToHistory({ role: 'user', content: userPrompt.slice(0, 400) });
         this.addToHistory({ role: 'assistant', content: content.slice(0, 400) });
         const parsed = this.parseResponse(content);
         console.log('LLM generate: Parsed result:', parsed ? 'success' : 'null');

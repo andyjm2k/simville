@@ -69,4 +69,68 @@ describe('LLMManager', () => {
     expect(result.actions).toBeDefined();
     expect(result.actions[0].action).toBe('idle');
   });
+
+  it('isLocalEndpoint detects localhost LM Studio URLs', () => {
+    manager.config.llm.endpoint = 'http://localhost:1234/v1';
+    expect(manager.isLocalEndpoint()).toBe(true);
+    manager.config.llm.endpoint = 'http://127.0.0.1:8080/v1';
+    expect(manager.isLocalEndpoint()).toBe(true);
+    manager.config.llm.endpoint = 'https://api.openai.com/v1';
+    expect(manager.isLocalEndpoint()).toBe(false);
+  });
+
+  it('buildChatMessages uses a single user message for local endpoints', () => {
+    manager.config.llm.endpoint = 'http://localhost:1234/v1';
+    manager.messageHistory = [
+      { role: 'user', content: 'Earlier request' },
+      { role: 'assistant', content: '{"actions":[]}' }
+    ];
+
+    const messages = manager.buildChatMessages('Plan villager actions', 'Custom system prompt');
+
+    expect(messages.some(message => message.role === 'system')).toBe(false);
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'user',
+      content: expect.stringContaining('Custom system prompt')
+    });
+    expect(messages[messages.length - 1].content).toContain('Plan villager actions');
+    expect(messages).toHaveLength(3);
+  });
+
+  it('buildChatMessages keeps one system message for remote endpoints', () => {
+    manager.config.llm.endpoint = 'https://api.openai.com/v1';
+
+    const messages = manager.buildChatMessages('Plan villager actions', 'Custom system prompt');
+    const systemMessages = messages.filter(message => message.role === 'system');
+
+    expect(systemMessages).toHaveLength(1);
+    expect(systemMessages[0].content).toContain('Custom system prompt');
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'user',
+      content: 'Plan villager actions'
+    });
+  });
+
+  it('buildChatMessages guarantees non-empty user content', () => {
+    manager.config.llm.endpoint = 'http://localhost:1234/v1';
+
+    const messages = manager.buildChatMessages('');
+    expect(messages[messages.length - 1].role).toBe('user');
+    expect(messages[messages.length - 1].content.trim().length).toBeGreaterThan(0);
+  });
+
+  it('getSanitizedHistory drops invalid or leading assistant entries', () => {
+    manager.messageHistory = [
+      { role: 'assistant', content: 'Orphan reply' },
+      { role: 'user', content: 'Valid request' },
+      { role: 'assistant', content: '{"ok":true}' },
+      { role: 'system', content: 'Should be removed' },
+      { role: 'user', content: '   ' }
+    ];
+
+    expect(manager.getSanitizedHistory()).toEqual([
+      { role: 'user', content: 'Valid request' },
+      { role: 'assistant', content: '{"ok":true}' }
+    ]);
+  });
 });
