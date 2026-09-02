@@ -481,9 +481,20 @@ class Villager {
     this.mood = Utils.clamp(Math.round(mood), -100, 100);
   }
 
-  moveTo(x, y, world) {
-    const destination = world.getWalkableTileNear(x, y, 3);
+  moveTo(x, y, world, options = {}) {
+    let destination = world.getWalkableTileNear(x, y, 3);
     if (!destination) return false;
+
+    if (!options.allowCrossTerritory && game?.canVillagerEnterTerritory && !game.canVillagerEnterTerritory(this, destination.x, destination.y)) {
+      const village = game.getVillage?.(this.villageId);
+      if (!village) return false;
+      destination = world.getWalkableTileNear(
+        village.center.x + Utils.randomFloat(-3, 3),
+        village.center.y + Utils.randomFloat(-3, 3),
+        4
+      );
+      if (!destination || !village.isInTerritory(destination.x, destination.y)) return false;
+    }
 
     const path = world.getPath(Math.round(this.x), Math.round(this.y), destination.x, destination.y);
     if (path && path.length > 0) {
