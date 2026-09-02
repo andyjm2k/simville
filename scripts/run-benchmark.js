@@ -128,16 +128,6 @@ Report Options:
   --metrics             Alias for --advanced-metrics
 
 Env: SIMVILLE_LLM_ENDPOINT, SIMVILLE_LLM_MODEL, SIMVILLE_LLM_API_KEY`);
-<<<<<<< HEAD
-  --advanced-metrics    Compute advanced performance metrics
-  --metrics             Alias for --advanced-metrics
-
-=======
-
-=======
->>>>>>> origin/main
->>>>>>> origin/main
-Env: SIMVILLE_LLM_ENDPOINT, SIMVILLE_LLM_MODEL, SIMVILLE_LLM_API_KEY`);
       process.exit(0);
     }
   }
@@ -150,7 +140,6 @@ Env: SIMVILLE_LLM_ENDPOINT, SIMVILLE_LLM_MODEL, SIMVILLE_LLM_API_KEY`);
   }
 
   return { options, singleRunConfig };
-<<<<<<< HEAD
 }
 
 function generateAdditionalReports(result, options, ReportGenerator) {
@@ -165,57 +154,6 @@ function generateAdditionalReports(result, options, ReportGenerator) {
     const report = ReportGenerator.generate(result, format, reportOptions);
     
     if (format === 'csv') {
-      // Generate multiple CSV files
-      if (typeof report === 'object') {
-        const base = outputPath.replace('.csv', '');
-        fs.writeFileSync(`${base}-daily.csv`, report.daily);
-        fs.writeFileSync(`${base}-final.csv`, report.final);
-        if (report.events) fs.writeFileSync(`${base}-events.csv`, report.events);
-        console.error(`CSV reports generated: ${base}-*.csv`);
-      } else {
-        fs.writeFileSync(outputPath, report);
-        console.error(`CSV report: ${outputPath}`);
-      }
-    } else {
-      fs.writeFileSync(outputPath, report);
-      console.error(`${format.toUpperCase()} report: ${outputPath}`);
-    }
-  } catch (err) {
-    console.error(`Failed to generate ${format} report:`, err.message);
-  }
-}
-
-function showTerminalCharts(result, BenchmarkVisualizer) {
-  try {
-    const charts = BenchmarkVisualizer.generateTerminalCharts(result, { width: 70, height: 15 });
-    
-    if (charts.scoreChart) {
-      console.error('\n' + charts.scoreChart);
-    }
-    
-    if (charts.finalComparison) {
-      console.error('\n' + charts.finalComparison);
-    }
-  } catch (err) {
-    console.error('Failed to generate terminal charts:', err.message);
-  }
-=======
->>>>>>> origin/main
-}
-
-function generateAdditionalReports(result, options, ReportGenerator) {
-  const format = options.reportFormat.toLowerCase();
-  const outputPath = options.reportOutput || `benchmark-report.${format === 'html' ? 'html' : format === 'csv' ? 'csv' : 'md'}`;
-
-  try {
-    const reportOptions = {
-      includeCharts: options.generateCharts
-    };
-
-    const report = ReportGenerator.generate(result, format, reportOptions);
-    
-    if (format === 'csv') {
-      // Generate multiple CSV files
       if (typeof report === 'object') {
         const base = outputPath.replace('.csv', '');
         fs.writeFileSync(`${base}-daily.csv`, report.daily);
@@ -258,16 +196,13 @@ function computeAdvancedMetrics(result, options, AdvancedMetrics) {
     const metrics = new AdvancedMetrics(result);
     const allMetrics = metrics.computeAll();
     
-    // Save to JSON file
     const metricsPath = result.config?.output?.replace('.json', '') || 'benchmark-report';
     const outputPath = `${metricsPath}-metrics.json`;
     fs.writeFileSync(outputPath, JSON.stringify(allMetrics, null, 2), 'utf8');
     console.error(`\nAdvanced metrics: ${outputPath}`);
     
-    // Print summary to console
     console.error('\n=== Advanced Metrics Summary ===');
     
-    // Efficiency metrics
     if (allMetrics.efficiency) {
       console.error('\nEfficiency:');
       for (const [villageId, eff] of Object.entries(allMetrics.efficiency)) {
@@ -279,7 +214,6 @@ function computeAdvancedMetrics(result, options, AdvancedMetrics) {
       }
     }
     
-    // LLM Performance
     if (allMetrics.llmPerformance) {
       console.error('\nLLM Performance:');
       for (const [villageId, perf] of Object.entries(allMetrics.llmPerformance)) {
@@ -292,7 +226,6 @@ function computeAdvancedMetrics(result, options, AdvancedMetrics) {
       }
     }
     
-    // Statistical comparison
     if (allMetrics.statistical && allMetrics.statistical.scoreDifference) {
       console.error('\nStatistical Analysis:');
       console.error(`  - Score difference: ${allMetrics.statistical.scoreDifference.absolute}`);
@@ -334,10 +267,6 @@ function loadScript(relPath, sandbox) {
 ;if (typeof FailureHandler !== 'undefined') globalThis.FailureHandler = FailureHandler;
 ;if (typeof ResilientBenchmarkRunner !== 'undefined') globalThis.ResilientBenchmarkRunner = ResilientBenchmarkRunner;
 ;if (typeof GracefulDegradation !== 'undefined') globalThis.GracefulDegradation = GracefulDegradation;
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> origin/main
 ;if (typeof ReportGenerator !== 'undefined') globalThis.ReportGenerator = ReportGenerator;
 ;if (typeof HTMLReportGenerator !== 'undefined') globalThis.HTMLReportGenerator = HTMLReportGenerator;
 ;if (typeof MarkdownReportGenerator !== 'undefined') globalThis.MarkdownReportGenerator = MarkdownReportGenerator;
@@ -346,13 +275,8 @@ function loadScript(relPath, sandbox) {
 ;if (typeof BatchAnalyzer !== 'undefined') globalThis.BatchAnalyzer = BatchAnalyzer;
 ;if (typeof BenchmarkVisualizer !== 'undefined') globalThis.BenchmarkVisualizer = BenchmarkVisualizer;
 ;if (typeof HeatmapGenerator !== 'undefined') globalThis.HeatmapGenerator = HeatmapGenerator;
-<<<<<<< HEAD
 ;if (typeof AdvancedMetrics !== 'undefined') globalThis.AdvancedMetrics = AdvancedMetrics;
 ;if (typeof MetricsAggregator !== 'undefined') globalThis.MetricsAggregator = MetricsAggregator;
-=======
-=======
->>>>>>> origin/main
->>>>>>> origin/main
 ;if (typeof Game !== 'undefined') globalThis.Game = Game;
 ;if (typeof module !== 'undefined' && module.exports) {
   const exported = module.exports;
@@ -399,7 +323,6 @@ function createSandbox() {
 async function runSingle(config, options, sandbox) {
   const { Game, BenchmarkRunner, ProgressMonitor, ResilientBenchmarkRunner } = sandbox;
   
-  // Set up progress monitoring
   const logLevel = options.silent ? 'silent' : (options.verbose ? 'verbose' : 'info');
   const monitor = new ProgressMonitor({ logLevel });
   monitor.startRun(config);
@@ -410,7 +333,6 @@ async function runSingle(config, options, sandbox) {
 
   const baseRunner = new BenchmarkRunner(game);
   
-  // Wrap with resilient runner for retry logic
   const runner = new ResilientBenchmarkRunner(baseRunner, {
     maxRetries: options.retries || 3,
     onRetry: (info) => {
@@ -418,7 +340,6 @@ async function runSingle(config, options, sandbox) {
     }
   });
 
-  // Hook into game tick for progress updates
   const originalRunHeadlessTick = game.runHeadlessTick;
   game.runHeadlessTick = async function(...args) {
     monitor.updateRun({ ticks: this.tickCount || 0, day: this.timeState?.day || 0 });
@@ -435,33 +356,21 @@ async function runSingle(config, options, sandbox) {
     console.error(`Report: ${outPath}`);
   }
 
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> origin/main
-  // Generate additional report formats
   if (options.reportFormat) {
     const { ReportGenerator } = sandbox;
     generateAdditionalReports(report, options, ReportGenerator);
   }
 
-  // Show terminal charts
   if (options.showTerminalCharts && !options.silent) {
     const { BenchmarkVisualizer } = sandbox;
     showTerminalCharts(report, BenchmarkVisualizer);
   }
 
-<<<<<<< HEAD
-  // Compute advanced metrics if requested
   if (options.advancedMetrics) {
     const { AdvancedMetrics } = sandbox;
     computeAdvancedMetrics(report, options, AdvancedMetrics);
   }
 
-=======
-=======
->>>>>>> origin/main
->>>>>>> origin/main
   return report;
 }
 
@@ -478,7 +387,6 @@ async function runBatch(batchConfig, options, sandbox) {
     progressCallback: (progress) => monitor.updateBatch(progress)
   });
 
-  // Enqueue runs from batch config
   if (batchConfig.runs) {
     for (const runConfig of batchConfig.runs) {
       batchRunner.enqueue(runConfig, { source: 'batch' });
@@ -487,7 +395,6 @@ async function runBatch(batchConfig, options, sandbox) {
 
   monitor.startBatch(batchRunner.queue.length);
 
-  // Run factory that creates fresh game instances
   const runnerFactory = () => {
     const game = new Game();
     const baseRunner = new BenchmarkRunner(game);
@@ -499,22 +406,15 @@ async function runBatch(batchConfig, options, sandbox) {
   const summary = await batchRunner.execute(runnerFactory);
   monitor.completeBatch(summary);
 
-  // Save batch report
   const outPath = path.resolve(batchConfig.output || 'batch-report.json');
   fs.writeFileSync(outPath, JSON.stringify(summary, null, 2));
 
-  // Clear checkpoint on success
   await batchRunner.clearCheckpoint();
 
   if (!options.silent) {
     console.error(`Batch report: ${outPath}`);
   }
 
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> origin/main
-  // Generate comparison analysis
   if (options.compareRuns) {
     const { BatchAnalyzer } = sandbox;
     const analysisPath = path.resolve(batchConfig.analysisOutput || 'batch-analysis.json');
@@ -525,7 +425,6 @@ async function runBatch(batchConfig, options, sandbox) {
       console.error(`Analysis report: ${analysisPath}`);
     }
 
-    // Generate markdown analysis report
     if (options.reportFormat === 'markdown' || options.reportFormat === 'md') {
       const mdPath = analysisPath.replace('.json', '.md');
       const mdReport = BatchAnalyzer.generateReport(summary, 'markdown');
@@ -536,11 +435,6 @@ async function runBatch(batchConfig, options, sandbox) {
     }
   }
 
-<<<<<<< HEAD
-=======
-=======
->>>>>>> origin/main
->>>>>>> origin/main
   return summary;
 }
 
@@ -557,7 +451,6 @@ async function runSweep(sweepConfig, options, sandbox) {
     progressCallback: (progress) => monitor.updateBatch(progress)
   });
 
-  // Generate parameter sweep
   const baseConfig = sweepConfig.baseConfig || {};
   const sweepParams = sweepConfig.sweep || {};
   const replicates = sweepConfig.replicates || 1;
@@ -581,7 +474,6 @@ async function runSweep(sweepConfig, options, sandbox) {
   const summary = await batchRunner.execute(runnerFactory);
   monitor.completeBatch(summary);
 
-  // Save sweep report with aggregated statistics
   const report = {
     ...summary,
     sweep: {
@@ -602,11 +494,6 @@ async function runSweep(sweepConfig, options, sandbox) {
     console.error(`Sweep report: ${outPath}`);
   }
 
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> origin/main
-  // Generate comparison analysis for sweep
   if (options.compareRuns) {
     const { BatchAnalyzer } = sandbox;
     const analysisPath = path.resolve(sweepConfig.analysisOutput || 'sweep-analysis.json');
@@ -619,7 +506,6 @@ async function runSweep(sweepConfig, options, sandbox) {
       console.error(`Analysis report: ${analysisPath}`);
     }
 
-    // Generate markdown analysis report
     if (options.reportFormat === 'markdown' || options.reportFormat === 'md') {
       const mdPath = analysisPath.replace('.json', '.md');
       const mdReport = BatchAnalyzer.generateReport(summary, 'markdown');
@@ -630,11 +516,6 @@ async function runSweep(sweepConfig, options, sandbox) {
     }
   }
 
-<<<<<<< HEAD
-=======
-=======
->>>>>>> origin/main
->>>>>>> origin/main
   return report;
 }
 
@@ -657,19 +538,10 @@ async function main() {
     'src/renderer/js/systems/batch-runner.js',
     'src/renderer/js/systems/progress-monitor.js',
     'src/renderer/js/systems/failure-handler.js',
-<<<<<<< HEAD
     'src/renderer/js/systems/report-generator.js',
     'src/renderer/js/systems/benchmark-analysis.js',
     'src/renderer/js/systems/visualizer.js',
     'src/renderer/js/systems/advanced-metrics.js',
-=======
-<<<<<<< HEAD
-    'src/renderer/js/systems/report-generator.js',
-    'src/renderer/js/systems/benchmark-analysis.js',
-    'src/renderer/js/systems/visualizer.js',
-=======
->>>>>>> origin/main
->>>>>>> origin/main
     'src/renderer/js/game.js'
   ];
 
@@ -686,7 +558,6 @@ async function main() {
   if (options.mode === 'batch') {
     result = await runBatch(options.batchConfig, options, sandbox);
     
-    // Output summary to stdout
     console.log(JSON.stringify({
       mode: 'batch',
       total: result.total,
@@ -708,7 +579,6 @@ async function main() {
     }, null, 2));
 
   } else {
-    // Single run
     if (!options.silent) {
       console.error(`Simville benchmark — seed=${singleRunConfig.seed} days=${singleRunConfig.days}`);
       console.error(`  Agent A: ${singleRunConfig.agentA?.type} (${singleRunConfig.agentA?.name || singleRunConfig.agentA?.model || '?'})`);
