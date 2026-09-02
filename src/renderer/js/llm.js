@@ -644,13 +644,13 @@ VILLAGE STATE:
 - Population: ${worldState.population} villagers
 - Resources: Wood=${worldState.resources.wood}, Food=${worldState.resources.food}, Water=${worldState.resources.water}, Stone=${worldState.resources.stone}, Herbs=${worldState.resources.herbs}
 
-RESEARCHED TECHNOLOGIES (${researchedTechs.length}): ${researchedTechs.map(id => CONSTANTS.TECH[id]?.name || id).join(', ') || 'None yet'}
+RESEARCHED TECHNOLOGIES (${researchedTechs.length}): ${researchedTechs.map(id => Utils.getTechDef(id)?.name || id).join(', ') || 'None yet'}
 
-CURRENT RESEARCH: ${currentResearch ? CONSTANTS.TECH[currentResearch]?.name || currentResearch : 'None'}
+CURRENT RESEARCH: ${currentResearch ? Utils.getTechDef(currentResearch)?.name || currentResearch : 'None'}
 
 AVAILABLE TECHNOLOGIES:
 ${allTechs.filter(t => t.isAvailable).map(t =>
-  `- ${t.name} (Tier ${t.tier}) ${t.prerequisites.length > 0 ? `[Requires: ${t.prerequisites.map(p => CONSTANTS.TECH[p]?.name || p).join(', ')}]` : ''} - ${t.description} (${t.researchTime} days)`
+  `- ${t.name} (id: ${t.id}, Tier ${t.tier}) ${t.prerequisites.length > 0 ? `[Requires: ${t.prerequisites.map(p => Utils.getTechDef(p)?.name || p).join(', ')}]` : ''} - ${t.description} (${t.researchTime} days)`
 ).join('\n')}
 
 ${allTechs.filter(t => t.isResearched).map(t =>
@@ -667,17 +667,21 @@ Output JSON with:
     const result = await this.generate(prompt);
 
     if (result && result.decision) {
+      const resolvedTech = Utils.getTechDef(result.techId);
       return {
         decision: result.decision,
-        techId: result.techId || null,
+        techId: resolvedTech?.id || result.techId || null,
         reason: result.reason || 'The village considers its options.'
       };
     }
 
     // Fallback: continue current research or pick first available
+    const fallbackTech = currentResearch
+      ? Utils.getTechDef(currentResearch)
+      : allTechs.find(t => t.isAvailable);
     return {
       decision: currentResearch ? 'continue' : 'start_new',
-      techId: currentResearch || allTechs.find(t => t.isAvailable)?.id || null,
+      techId: fallbackTech?.id || null,
       reason: 'Using village wisdom to guide research.'
     };
   }

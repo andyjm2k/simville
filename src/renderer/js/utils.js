@@ -297,5 +297,25 @@ const Utils = {
     if (mood >= -25) return { text: 'Uneasy', class: 'mood-neutral' };
     if (mood >= -50) return { text: 'Sad', class: 'mood-negative' };
     return { text: 'Miserable', class: 'mood-negative' };
+  },
+
+  // Resolve a tech definition by object key, id, or display name
+  getTechDef(techRef) {
+    if (!techRef) return null;
+    const text = String(techRef).trim();
+    if (!text) return null;
+
+    if (CONSTANTS.TECH[text]) return CONSTANTS.TECH[text];
+
+    const byId = Object.values(CONSTANTS.TECH).find(t => t.id === text);
+    if (byId) return byId;
+
+    const upperKey = text.toUpperCase();
+    if (CONSTANTS.TECH[upperKey]) return CONSTANTS.TECH[upperKey];
+
+    const lower = text.toLowerCase();
+    return Object.values(CONSTANTS.TECH).find(t =>
+      t.name.toLowerCase() === lower || t.id === lower
+    ) || null;
   }
 };

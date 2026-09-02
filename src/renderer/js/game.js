@@ -4121,7 +4121,7 @@ Respond with JSON: {
     if (!techState?.currentResearch) return;
 
     const { techId } = techState.currentResearch;
-    const tech = CONSTANTS.TECH[techId];
+    const tech = Utils.getTechDef(techId);
     if (!tech) {
       techState.currentResearch = null;
       return;
@@ -4166,6 +4166,11 @@ Respond with JSON: {
   async requestVillageTechDecision(village) {
     if (this.paused || !llm.config?.llm?.apiKey) return;
 
+    const techState = village.techState;
+
+    // Only ask the LLM to pick a tech when nothing is actively being researched
+    if (techState.currentResearch) return;
+
     const villageVillagers = this.getVillagersForVillage(village.id);
     const worldState = {
       resources: this.getResources(village.id),
@@ -4186,35 +4191,36 @@ Respond with JSON: {
       dayInSeason: this.timeState.dayInSeason
     };
 
-    const techState = village.techState;
-
     try {
       const decision = await llm.generateTechDecision(worldState, techState, timeState);
       if (!decision) return;
+
+      const resolvedTech = Utils.getTechDef(decision.techId);
+      const normalizedTechId = resolvedTech?.id || null;
 
       if (decision.reason) {
         console.log(`Tech decision for ${village.name}: ${decision.decision} - ${decision.reason}`);
       }
 
-      if (decision.decision === 'switch' && decision.techId) {
+      if (decision.decision === 'switch' && normalizedTechId) {
         const oldResearch = techState.currentResearch?.techId;
-        this.startTechResearch(decision.techId, village.id);
+        this.startTechResearch(normalizedTechId, village.id);
         if (oldResearch) {
           this.addChronicleEntry(
-            `${village.name} shifts focus from ${CONSTANTS.TECH[oldResearch]?.name || oldResearch} to ${CONSTANTS.TECH[decision.techId]?.name || decision.techId}.`,
+            `${village.name} shifts focus from ${Utils.getTechDef(oldResearch)?.name || oldResearch} to ${resolvedTech.name}.`,
             'normal',
             village.id
           );
         }
-      } else if (decision.decision === 'start_new' && decision.techId && !techState.currentResearch) {
-        this.startTechResearch(decision.techId, village.id);
+      } else if (decision.decision === 'start_new' && normalizedTechId && !techState.currentResearch) {
+        this.startTechResearch(normalizedTechId, village.id);
         this.addChronicleEntry(
-          `${village.name} begins researching ${CONSTANTS.TECH[decision.techId]?.name || decision.techId}.`,
+          `${village.name} begins researching ${resolvedTech.name}.`,
           'normal',
           village.id
         );
       } else if (decision.decision === 'continue' && techState.currentResearch) {
-        const tech = CONSTANTS.TECH[techState.currentResearch.techId];
+        const tech = Utils.getTechDef(techState.currentResearch.techId);
         if (tech && Math.random() < 0.3) {
           const progress = Math.round(techState.currentResearch.progress * 100);
           this.addChronicleEntry(
@@ -4246,14 +4252,17 @@ Respond with JSON: {
     const village = this.getVillage(villageId) || this.getSelectedVillage();
     if (!village) return false;
     const techState = village.techState;
-    const tech = CONSTANTS.TECH[techId];
+    const tech = Utils.getTechDef(techId);
     if (!tech) return false;
-    if (techState.researched.includes(techId)) return false;
+
+    const canonicalId = tech.id;
+    if (techState.researched.includes(canonicalId)) return false;
+    if (techState.currentResearch?.techId === canonicalId) return true;
     const prereqsMet = tech.prerequisites.every(p => techState.researched.includes(p));
     if (!prereqsMet) return false;
 
     techState.currentResearch = {
-      techId,
+      techId: canonicalId,
       progress: 0,
       startDay: this.timeState.day
     };
@@ -4265,7 +4274,7 @@ Respond with JSON: {
   getTechResearchProgress(villageId = null) {
     const techState = this.getTechState(villageId);
     if (!techState.currentResearch) return null;
-    const tech = CONSTANTS.TECH[techState.currentResearch.techId];
+    const tech = Utils.getTechDef(techState.currentResearch.techId);
     return {
       tech,
       progress: techState.currentResearch.progress,
@@ -4276,16 +4285,14 @@ Respond with JSON: {
   getResearchedTechs(villageId = null) {
     const techState = this.getTechState(villageId);
     return techState.researched
-      .map(id => CONSTANTS.TECH[id] || Object.values(CONSTANTS.TECH).find(t => t.id === id))
+      .map(id => Utils.getTechDef(id))
       .filter(Boolean);
   }
 
   hasTech(techId, villageId = null) {
     if (!techId) return false;
     const techState = this.getTechState(villageId);
-    if (techState.researched.includes(techId)) return true;
-    const tech = CONSTANTS.TECH[techId] ||
-      Object.values(CONSTANTS.TECH).find(t => t.id === techId);
+    const tech = Utils.getTechDef(techId);
     if (!tech) return false;
     return techState.researched.includes(tech.id);
   }
