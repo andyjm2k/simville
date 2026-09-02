@@ -516,10 +516,13 @@ Respond with valid JSON only: {"chronicle":"Your 2-3 sentence chronicle text her
     // Include structure positions for context
     const structureContext = worldState.structures?.map(s => `${s.type} at (${s.x}, ${s.y})`).join(', ') || 'none yet';
     const center = worldState.villageCenter || { x: 32, y: 32 };
+    const territoryRadius = worldState.territoryRadius || 12;
+    const villageName = worldState.villageName || 'your tribe';
     const rival = worldState.rivalVillage;
     const rivalBlock = rival ? `
 RIVAL VILLAGE (competitive opponent — outplay them):
 - Name: ${rival.name}
+- Center: (${rival.center?.x ?? '?'}, ${rival.center?.y ?? '?'}) — DO NOT enter their territory unless at war
 - Population: ${rival.population}
 - Relation score: ${rival.relation} (-100=war, 0=neutral, +100=allied)
 - At war: ${rival.atWar ? 'YES' : 'no'}
@@ -531,10 +534,13 @@ Prioritize actions that strengthen YOUR village vs this rival (food security, bu
 
 TIME: Day ${timeState.day}, ${Utils.formatTime(timeState.hours)} (${Utils.getTimeOfDay(timeState.hours)})
 SEASON: ${timeState.season.name} (Day ${timeState.dayInSeason}/${timeState.season.duration})
+TRIBE: ${villageName}
 VILLAGE RESOURCES: Wood=${worldState.resources.wood}, Food=${worldState.resources.food}, Water=${worldState.resources.water}, Stone=${worldState.resources.stone}, Herbs=${worldState.resources.herbs}, Clay=${worldState.resources.clay}, Fish=${worldState.resources.fish || 0}, Thatch=${worldState.resources.thatch || 0}, RareMaterials=${worldState.resources.rareMaterials || 0}
-POPULATION: ${villagers.length} villagers
+POPULATION: ${villagers.length} villagers (all belong to ${villageName})
 STRUCTURES: ${structureContext}
-WORLD SIZE: 64x64 tiles, your village center is around (${center.x}, ${center.y})
+WORLD SIZE: 64x64 tiles
+YOUR VILLAGE CENTER: (${center.x}, ${center.y})
+YOUR TERRITORY RADIUS: ${territoryRadius} tiles from center — stay within this area
 ${rivalBlock}
 
 VILLAGERS (with current positions):
@@ -545,21 +551,23 @@ Based on each villager's needs, personality, and the time of day, decide what th
 Output JSON with an "actions" array. Each action has:
 - villagerId: string (the villager's id)
 - action: idle|working|gathering|building|farming|hunting|fishing|socializing|sleeping|eating|drinking|resting|ritual
-- moveTo: {x: number, y: number} - tile coordinates to move to (0-64 range, village center is ~32,32)
+- moveTo: {x: number, y: number} - tile coordinates within YOUR territory (${center.x}±${territoryRadius}, ${center.y}±${territoryRadius})
 - target: optional villager name or resource type
 - duration: 1-10 (minutes in game time)
 - speechEmoji: emoji from this list 💬😂😢😠😍🤝😮🤔🍖😴💪🎣🏠👶🙏🎉
 - speechTheme: brief description of what they're saying or doing
-- interactionTarget: villager name if action involves another villager
+- interactionTarget: villager name if action involves another villager (ONLY villagers listed above from your tribe)
 - interactionType: talk|argue|share|help|romance|gossip if applicable
 
 Rules:
+- TRIBAL BOUNDARIES: All villagers belong to ${villageName}. Keep moveTo coordinates within your territory radius of (${center.x}, ${center.y}). Never path toward a rival village center unless at war.
+- SOCIAL BONDS: Only socialize with villagers from your own tribe listed above. Rival tribes are separate communities.
 - CRITICAL SURVIVAL PRIORITY: If ANY villager has hunger < 40, thirst < 40, or energy < 30, they MUST be assigned eating, drinking, gathering, hunting, fishing, or resting. NEVER assign idle, working, socializing, or building to a villager with critical needs.
-- Movement should be purposeful - if action is gathering, move towards resources
-- If socializing, move towards the other villager
-- If sleeping/eating/drinking, move towards a hut, fire, well, or water source
-- Active villagers should be working or gathering
-- Social villagers should seek out others
+- Movement should be purposeful - if action is gathering, move towards resources within your territory
+- If socializing, move towards another villager from your tribe
+- If sleeping/eating/drinking, move towards a hut, fire, well, or water source in your village
+- Active villagers should be working or gathering within tribal lands
+- Social villagers should seek out others from their own tribe
 - Move coordinates should be integers between 0-63
 - Villagers with hunger < 30 or thirst < 30 should always be assigned survival actions first`;
 

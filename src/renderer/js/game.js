@@ -83,6 +83,51 @@ class Game {
     return this.villages.find(v => v.id === id);
   }
 
+  areSameTribe(villagerA, villagerB) {
+    return villagerA?.villageId && villagerB?.villageId && villagerA.villageId === villagerB.villageId;
+  }
+
+  getTerritoryOwnerAt(x, y) {
+    for (const village of this.villages) {
+      if (village.isInTerritory(x, y)) return village;
+    }
+    return null;
+  }
+
+  canVillagerEnterTerritory(villager, x, y) {
+    const owner = this.getTerritoryOwnerAt(x, y);
+    if (!owner) return true;
+    if (owner.id === villager.villageId) return true;
+    const home = this.getVillage(villager.villageId);
+    if (!home) return false;
+    if (home.atWarWith?.includes(owner.id)) return true;
+    const relation = home.relations?.[owner.id] ?? CONSTANTS.VILLAGE_RELATION.NEUTRAL;
+    return relation >= CONSTANTS.VILLAGE_RELATION.FRIENDLY_THRESHOLD;
+  }
+
+  canVillagersSocialize(villagerA, villagerB) {
+    if (!villagerA || !villagerB || villagerA.id === villagerB.id) return false;
+    if (this.areSameTribe(villagerA, villagerB)) return true;
+    const home = this.getVillage(villagerA.villageId);
+    const other = this.getVillage(villagerB.villageId);
+    if (!home || !other) return false;
+    const relation = home.relations?.[other.id] ?? CONSTANTS.VILLAGE_RELATION.NEUTRAL;
+    return relation >= CONSTANTS.VILLAGE_RELATION.FRIENDLY_THRESHOLD;
+  }
+
+  getVillagerVillageCenter(villager) {
+    const village = this.getVillage(villager?.villageId);
+    return village?.center || this.world?.villageCenter || { x: 32, y: 32 };
+  }
+
+  findNearestResourceInTerritory(villager, type, radius = 10) {
+    const village = this.getVillage(villager.villageId);
+    if (!village) return this.findNearestResource(villager.x, villager.y, type, radius);
+    return this.world.getResourcesInRadius(villager.x, villager.y, radius)
+      .filter(r => r.type === type && !r.depleted && r.amount > 0 && village.isInTerritory(r.x, r.y))
+      .sort((a, b) => Utils.distance(a.x, a.y, villager.x, villager.y) - Utils.distance(b.x, b.y, villager.y))[0] || null;
+  }
+
   // Currently selected tribe for HUD, chronicle, tech tree, and build menu
   getSelectedVillage() {
     return this.getVillage(this.hudVillageId) || this.villages[0] || null;
@@ -1577,6 +1622,7 @@ class Game {
       for (let j = i + 1; j < this.villagers.length; j++) {
         const a = this.villagers[i];
         const b = this.villagers[j];
+        if (!this.canVillagersSocialize(a, b)) continue;
         if (this.areCloseFamily(a, b)) {
           this.modifyMutualRelationship(a, b, 0.6);
           continue;
@@ -1608,6 +1654,7 @@ class Game {
         const a = adults[i];
         const b = adults[j];
         if (a.partnerId || b.partnerId || this.areCloseFamily(a, b)) continue;
+        if (!this.areSameTribe(a, b)) continue;
 
         const relationship = this.getMutualRelationship(a, b);
         if (relationship < CONSTANTS.RELATIONSHIP.FRIEND_THRESHOLD + 15) continue;
@@ -1676,6 +1723,7 @@ class Game {
       adults.slice(index + 1).forEach(b => {
         const key = [a.id, b.id].sort().join(':');
         if (seen.has(key) || this.areCloseFamily(a, b)) return;
+        if (!this.areSameTribe(a, b)) return;
         if (this.getMutualRelationship(a, b) < CONSTANTS.RELATIONSHIP.BEST_FRIEND_THRESHOLD - 10) return;
         seen.add(key);
         couples.push([a, b]);
@@ -1703,18 +1751,22 @@ class Game {
   createBabyForParents(parentA, parentB = null) {
     const parents = [parentA, parentB].filter(Boolean);
     const gender = Utils.randomElement(['male', 'female', 'nonbinary']);
+    const villageId = parentA?.villageId || parentB?.villageId || this.villages[0]?.id;
+    const village = this.getVillage(villageId);
+    const spawnCenter = village?.center || this.getVillagerVillageCenter(parentA);
     const spawn = this.world.getWalkableTileNear(
-      this.world.villageCenter.x + Utils.randomInt(-2, 2),
-      this.world.villageCenter.y + Utils.randomInt(-2, 2),
+      spawnCenter.x + Utils.randomInt(-2, 2),
+      spawnCenter.y + Utils.randomInt(-2, 2),
       4
-    ) || this.world.getTile(this.world.villageCenter.x, this.world.villageCenter.y);
+    ) || this.world.getTile(spawnCenter.x, spawnCenter.y);
 
     const baby = new Villager({
       name: this.generateUniqueVillagerName(gender),
       age: 0,
       gender,
-      x: spawn?.x ?? this.world.villageCenter.x,
-      y: spawn?.y ?? this.world.villageCenter.y,
+      villageId,
+      x: spawn?.x ?? spawnCenter.x,
+      y: spawn?.y ?? spawnCenter.y,
       parentIds: parents.map(parent => parent.id),
       parentNames: parents.map(parent => parent.name),
       skills: {
@@ -2174,7 +2226,7 @@ class Game {
         rewardText = `bond with ${target.name} strengthened`;
       } else {
         this.villagers
-          .filter(other => other.id !== villager.id)
+          .filter(other => other.id !== villager.id && this.canVillagersSocialize(villager, other))
           .forEach(other => {
             villager.modifyRelationship(other.name, Math.ceil(gain * 0.35));
             other.modifyRelationship(villager.name, Math.ceil(gain * 0.2));
@@ -2195,7 +2247,7 @@ class Game {
       villager.mood = Math.min(100, villager.mood + 10 * rewardScale);
       villager.energy = Math.min(100, villager.energy + 8);
       this.villagers
-        .filter(other => other.id !== villager.id)
+        .filter(other => other.id !== villager.id && this.canVillagersSocialize(villager, other))
         .forEach(other => {
           villager.modifyRelationship(other.name, 2);
           other.modifyRelationship(villager.name, 1);
@@ -2237,7 +2289,7 @@ class Game {
     if (explicitTarget) return explicitTarget;
 
     return this.villagers
-      .filter(other => other.id !== villager.id)
+      .filter(other => other.id !== villager.id && this.canVillagersSocialize(villager, other))
       .sort((a, b) => villager.getRelationship(b) - villager.getRelationship(a))[0] || null;
   }
 
@@ -2262,20 +2314,23 @@ class Game {
     };
 
     const structureType = structureBySkill[skill];
-    const structure = structureType && this.world.structures.find(s => s.type === structureType);
+    const village = this.getVillage(villager.villageId);
+    const structureIds = village?.structureIds || [];
+    const structure = structureType && this.world.structures.find(s => s.type === structureType && structureIds.includes(s.id));
     if (structure) {
       villager.moveTo(structure.x, structure.y, this.world);
       return;
     }
 
     const resourceType = resourceBySkill[skill];
-    const resource = resourceType && this.findNearestResource(villager.x, villager.y, resourceType, 14);
+    const resource = resourceType && this.findNearestResourceInTerritory(villager, resourceType, 14);
     if (resource) {
       villager.moveTo(resource.x, resource.y, this.world);
       return;
     }
 
-    const tile = this.world.getWalkableTileNear(this.world.villageCenter.x + Utils.randomInt(-4, 4), this.world.villageCenter.y + Utils.randomInt(-4, 4), 4);
+    const center = this.getVillagerVillageCenter(villager);
+    const tile = this.world.getWalkableTileNear(center.x + Utils.randomInt(-4, 4), center.y + Utils.randomInt(-4, 4), 4);
     if (tile) villager.moveTo(tile.x, tile.y, this.world);
   }
 
@@ -2355,6 +2410,7 @@ class Game {
     const rivalInfo = rival ? {
       id: rival.id,
       name: rival.name,
+      center: { ...rival.center },
       population: this.getVillagersForVillage(rival.id).length,
       resources: this.getResources(rival.id),
       relation: village.relations?.[rival.id] || 0,
@@ -2370,6 +2426,7 @@ class Game {
       population: this.getVillagersForVillage(village.id).length,
       villageCenter: { ...village.center },
       villageName: village.name,
+      territoryRadius: village.territoryRadius,
       rivalVillage: rivalInfo
     };
   }
@@ -2466,7 +2523,7 @@ class Game {
 
       if (action.interactionTarget) {
         const target = this.villagers.find(v => v.name === action.interactionTarget || v.id === action.interactionTarget);
-        if (target) {
+        if (target && this.canVillagersSocialize(villager, target)) {
           const dist = Utils.distance(villager.x, villager.y, target.x, target.y);
           if (dist <= CONSTANTS.INTERACTION.PROXIMITY_REQUIRED) {
             const relChange = action.interactionType === 'argue' ? -5 : 3;
@@ -2631,16 +2688,6 @@ class Game {
     if (this.isGeneratingActions) return;
     this.isGeneratingActions = true;
 
-    // Build world state for LLM
-    const worldState = {
-      resources: this.getHudResources(),
-      structures: this.world.structures.map(s => ({ type: s.type, x: s.x, y: s.y })),
-      population: this.villagers.length,
-      day: this.timeState.day,
-      timeOfDay: Utils.getTimeOfDay(this.timeState.hours),
-      season: this.timeState.season.name
-    };
-
     const timeState = {
       day: this.timeState.day,
       hours: this.timeState.hours,
@@ -2649,13 +2696,17 @@ class Game {
     };
 
     try {
-      const actions = await llm.generateVillagerActions(this.villagers, worldState, timeState);
-
-      // Track significant events for chronicle
       const notableEvents = [];
 
-      // Apply actions to villagers
-      for (const rawAction of actions) {
+      for (const village of this.villages) {
+        const villageVillagers = this.getVillagersForVillage(village.id);
+        if (!villageVillagers.length) continue;
+
+        const rival = this.getRivalVillage(village.id);
+        const worldState = this.buildWorldStateForVillage(village, rival);
+        const actions = await llm.generateVillagerActions(villageVillagers, worldState, timeState);
+
+        for (const rawAction of actions) {
         const action = this.sanitizeVillagerAction(rawAction);
         const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
         if (villager) {
@@ -2770,7 +2821,7 @@ class Game {
           // Handle social interaction - record notable ones (only if within proximity)
           if (action.interactionTarget) {
             const target = this.villagers.find(v => v.name === action.interactionTarget);
-            if (target) {
+            if (target && this.canVillagersSocialize(villager, target)) {
               // Check proximity - villagers must be within range to interact
               const dist = Utils.distance(villager.x, villager.y, target.x, target.y);
               if (dist > CONSTANTS.INTERACTION.PROXIMITY_REQUIRED) {
@@ -2835,11 +2886,7 @@ class Game {
             });
           }
         }
-      }
-
-      // LLM-driven building decisions
-      if (actions.buildSuggestion) {
-        this.handleBuildSuggestion(actions.buildSuggestion);
+        }
       }
 
       // Add notable events to chronicle (limit to prevent spam)
@@ -2957,7 +3004,7 @@ class Game {
   assignWaterWork(villager) {
     if (villager.isMoving && villager.currentAction?.survivalTask === 'water') return true;
 
-    const waterNode = this.findNearestResource(villager.x, villager.y, CONSTANTS.RESOURCE.WATER, 18);
+    const waterNode = this.findNearestResourceInTerritory(villager, CONSTANTS.RESOURCE.WATER, 18);
     if (waterNode) {
       villager.currentAction = { action: CONSTANTS.ACTIVITY.GATHERING, survivalTask: 'water' };
       villager.status = CONSTANTS.ACTIVITY.GATHERING;
@@ -2973,7 +3020,11 @@ class Game {
       return true;
     }
 
-    const well = this.world.structures.find(s => s.type === 'well');
+    const well = this.world.structures.find(s => {
+      if (s.type !== 'well') return false;
+      const village = this.getVillage(villager.villageId);
+      return village?.structureIds?.includes(s.id);
+    });
     if (well) {
       this.addResource(CONSTANTS.RESOURCE.WATER, Math.max(2, villager.skills.gathering || 1), villager.villageId, villager.x, villager.y);
       villager.status = CONSTANTS.ACTIVITY.GATHERING;
@@ -3006,11 +3057,11 @@ class Game {
     const targetType = priorities.find(resource => {
       const targetReserve = resource === CONSTANTS.RESOURCE.RARE_MATERIALS ? 2 : 18;
       return (this.getResources(villager.villageId)[resource] || 0) < targetReserve &&
-        this.findNearestResource(villager.x, villager.y, resource, 16);
+        this.findNearestResourceInTerritory(villager, resource, 16);
     });
     if (!targetType) return;
 
-    const node = this.findNearestResource(villager.x, villager.y, targetType, 16);
+    const node = this.findNearestResourceInTerritory(villager, targetType, 16);
     if (!node) return;
 
     villager.currentAction = { action: CONSTANTS.ACTIVITY.GATHERING, survivalTask: 'materials' };
@@ -3029,8 +3080,8 @@ class Game {
   assignFoodWork(villager) {
     if (villager.isMoving && villager.currentAction?.survivalTask === 'food') return true;
 
-    const foodNode = this.findNearestResource(villager.x, villager.y, CONSTANTS.RESOURCE.FOOD, 14);
-    const fishNode = this.findNearestResource(villager.x, villager.y, CONSTANTS.RESOURCE.FISH, 14);
+    const foodNode = this.findNearestResourceInTerritory(villager, CONSTANTS.RESOURCE.FOOD, 14);
+    const fishNode = this.findNearestResourceInTerritory(villager, CONSTANTS.RESOURCE.FISH, 14);
 
     if (foodNode) {
       villager.currentAction = { action: CONSTANTS.ACTIVITY.GATHERING, survivalTask: 'food' };
@@ -3144,12 +3195,15 @@ class Game {
 
   handleGathering(villager, resourceType) {
     resourceType = this.normalizeResourceType(resourceType) || CONSTANTS.RESOURCE.FOOD;
-    // Find nearby resource of the specified type
+    const village = this.getVillage(villager.villageId);
+    const inTerritory = (r) => !village || village.isInTerritory(r.x, r.y);
+
+    // Find nearby resource of the specified type within tribal lands
     const nearby = this.world.getResourcesInRadius(villager.x, villager.y, 8);
-    let resource = nearby.find(r => r.type === resourceType && !r.depleted);
+    let resource = nearby.find(r => r.type === resourceType && !r.depleted && inTerritory(r));
 
     if (!resource) {
-      resource = this.findNearestResource(villager.x, villager.y, resourceType, 18);
+      resource = this.findNearestResourceInTerritory(villager, resourceType, 18);
       if (resource) {
         villager.moveTo(resource.x, resource.y, this.world);
       }
@@ -3547,6 +3601,10 @@ Respond with JSON: {
     if (this.villagers.some(v => v.id === newVillager.id)) return;
 
     this.villagers.push(newVillager);
+    const village = this.getVillage(newVillager.villageId);
+    if (village && !village.villagerIds.includes(newVillager.id)) {
+      village.villagerIds.push(newVillager.id);
+    }
     this.incrementChronicleStat('births', newVillager.villageId);
     const parentNames = newVillager.parentNames?.join(' and ') || 'the village';
     this.addChronicleEntry(`${newVillager.name} has been born to ${parentNames}!`, 'celebration', newVillager.villageId);
@@ -3778,6 +3836,7 @@ Respond with JSON: {
       const potentialPartners = this.villagers.filter(v =>
         v.id !== villager.id &&
         v.id !== villager.partnerId &&
+        this.areSameTribe(villager, v) &&
         !this.areCloseFamily(villager, v) &&
         !v.partnerId // Prefer unmarried
       );
