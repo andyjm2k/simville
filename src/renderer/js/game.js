@@ -95,15 +95,42 @@ class Game {
     return null;
   }
 
+  /**
+   * Why a home village may enter another tribe's claimed land.
+   * Only two tracks open foreign territory: conquest (war) or trade (agreement/alliance/friendly).
+   * First contact / discovery alone never opens borders.
+   * @returns {'war'|'trade'|null}
+   */
+  getForeignTerritoryAccess(homeVillage, ownerVillage) {
+    if (!homeVillage || !ownerVillage || homeVillage.id === ownerVillage.id) return null;
+
+    // Conquest track — wartime entry for raids and conflict
+    if (homeVillage.atWarWith?.includes(ownerVillage.id)) {
+      return CONSTANTS.TERRITORY_ACCESS.WAR;
+    }
+
+    // Trade track — formal trade/alliance partners or friendly+ relations
+    if (homeVillage.hasTradePartner?.(ownerVillage.id)) {
+      return CONSTANTS.TERRITORY_ACCESS.TRADE;
+    }
+    const relation = homeVillage.relations?.[ownerVillage.id] ?? CONSTANTS.VILLAGE_RELATION.NEUTRAL;
+    if (relation >= CONSTANTS.VILLAGE_RELATION.FRIENDLY_THRESHOLD) {
+      return CONSTANTS.TERRITORY_ACCESS.TRADE;
+    }
+
+    return null;
+  }
+
   canVillagerEnterTerritory(villager, x, y) {
     const owner = this.getTerritoryOwnerAt(x, y);
+    // Unclaimed wilderness is always traversable for scouting / travel
     if (!owner) return true;
+    // Home tribal lands
     if (owner.id === villager.villageId) return true;
     const home = this.getVillage(villager.villageId);
     if (!home) return false;
-    if (home.atWarWith?.includes(owner.id)) return true;
-    const relation = home.relations?.[owner.id] ?? CONSTANTS.VILLAGE_RELATION.NEUTRAL;
-    return relation >= CONSTANTS.VILLAGE_RELATION.FRIENDLY_THRESHOLD;
+    // Foreign claimed land: war (conquest) or trade track only
+    return this.getForeignTerritoryAccess(home, owner) != null;
   }
 
   canVillagersSocialize(villagerA, villagerB) {
@@ -112,8 +139,27 @@ class Game {
     const home = this.getVillage(villagerA.villageId);
     const other = this.getVillage(villagerB.villageId);
     if (!home || !other) return false;
+    // Wartime: no peaceful cross-tribe socializing
+    if (home.atWarWith?.includes(other.id)) return false;
+    // Trade track opens peaceful contact; first contact alone does not
+    if (home.hasTradePartner?.(other.id)) return true;
     const relation = home.relations?.[other.id] ?? CONSTANTS.VILLAGE_RELATION.NEUTRAL;
     return relation >= CONSTANTS.VILLAGE_RELATION.FRIENDLY_THRESHOLD;
+  }
+
+  // Mutual open borders on the trade/alliance track
+  establishTradeAccess(villageA, villageB) {
+    if (!villageA || !villageB || villageA.id === villageB.id) return false;
+    const addedA = villageA.addTradePartner(villageB.id);
+    const addedB = villageB.addTradePartner(villageA.id);
+    return addedA || addedB;
+  }
+
+  // Close trade-track borders (used when war starts)
+  revokeTradeAccess(villageA, villageB) {
+    if (!villageA || !villageB) return;
+    villageA.revokeTradePartner?.(villageB.id);
+    villageB.revokeTradePartner?.(villageA.id);
   }
 
   getSocialRange() {
@@ -2601,6 +2647,7 @@ class Game {
   buildWorldStateForVillage(village, rival = null) {
     const structureIds = new Set(village.structureIds || []);
     const discovered = rival ? (this.explorationSystem?.hasDiscovered(village, rival) || false) : false;
+    const territoryAccess = rival ? this.getForeignTerritoryAccess(village, rival) : null;
     const rivalInfo = rival ? {
       id: rival.id,
       name: rival.name,
@@ -2610,6 +2657,8 @@ class Game {
       resources: discovered ? this.getResources(rival.id) : null,
       relation: village.relations?.[rival.id] || 0,
       atWar: village.atWarWith?.includes(rival.id) || false,
+      tradeOpen: territoryAccess === CONSTANTS.TERRITORY_ACCESS.TRADE,
+      territoryAccess,
       strength: discovered ? Math.round(rival.calculateStrength(this.villagers) * 10) / 10 : null
     } : null;
 

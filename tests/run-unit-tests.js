@@ -119,6 +119,7 @@ function makeVillage(id, resources = {}) {
     knownVillages: [],
     lastScoutDay: 0,
     scoutAttempts: 0,
+    tradePartners: [],
     isInTerritory(x, y) {
       const dx = x - this.center.x;
       const dy = y - this.center.y;
@@ -133,6 +134,21 @@ function makeVillage(id, resources = {}) {
       if (this.knownVillages.includes(villageId)) return false;
       this.knownVillages.push(villageId);
       return true;
+    },
+    hasTradePartner(villageId) {
+      return (this.tradePartners || []).includes(villageId);
+    },
+    addTradePartner(villageId) {
+      if (!villageId || villageId === this.id) return false;
+      this.tradePartners = this.tradePartners || [];
+      if (this.tradePartners.includes(villageId)) return false;
+      this.tradePartners.push(villageId);
+      return true;
+    },
+    revokeTradePartner(villageId) {
+      const before = (this.tradePartners || []).length;
+      this.tradePartners = (this.tradePartners || []).filter((id) => id !== villageId);
+      return this.tradePartners.length !== before;
     },
     calculateStrength() {
       return this.villagerIds.length * 10;
@@ -164,6 +180,14 @@ function makeGame(villages) {
     },
     canVillagerEnterTerritory() {
       return true;
+    },
+    establishTradeAccess(a, b) {
+      a.addTradePartner(b.id);
+      b.addTradePartner(a.id);
+    },
+    revokeTradeAccess(a, b) {
+      a.revokeTradePartner(b.id);
+      b.revokeTradePartner(a.id);
     },
     addChronicleEntry(text) {
       this.chronicle.push(text);
@@ -446,6 +470,20 @@ test('processChieftanDecisions applies trade bonus', () => {
   game.diplomacySystem.processChieftanDecisions();
   assert.strictEqual(a.relations.b, 15);
   assert.strictEqual(game.diplomaticEvents.length, 0);
+  assert.ok(a.hasTradePartner('b'));
+  assert.ok(b.hasTradePartner('a'));
+});
+
+test('triggerWar revokes trade partners for conquest track', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  a.tradePartners = ['b'];
+  b.tradePartners = ['a'];
+  const game = makeGame([a, b]);
+  game.diplomacySystem.triggerWar('a', 'b');
+  assert.deepStrictEqual(a.tradePartners, []);
+  assert.deepStrictEqual(b.tradePartners, []);
+  assert.ok(a.atWarWith.includes('b'));
 });
 
 test('evaluateWarEscalation increments unique pair once', () => {

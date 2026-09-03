@@ -521,18 +521,20 @@ Respond with valid JSON only: {"chronicle":"Your 2-3 sentence chronicle text her
     const rival = worldState.rivalVillage;
     const exploreRange = territoryRadius + (CONSTANTS.EXPLORATION?.WILDERNESS_WANDER_RANGE || 10);
     const rivalBlock = !rival ? '' : rival.discovered ? `
-RIVAL TRIBE (discovered — do not live in their village):
+RIVAL TRIBE (discovered — claimed land still closed):
 - Name: ${rival.name}
 - Center: (${rival.center?.x ?? '?'}, ${rival.center?.y ?? '?'})
 - Population: ${rival.population}
 - Relation score: ${rival.relation} (-100=war, 0=neutral, +100=allied)
 - At war: ${rival.atWar ? 'YES' : 'no'}
+- Trade/open borders: ${rival.tradeOpen ? 'YES' : 'no'}
 - Their strength: ${rival.strength}
 - Their resources: ${JSON.stringify(rival.resources)}
-Curious villagers MAY scout unclaimed wilderness toward them. NEVER enter their claimed territory unless at war or allied.` : `
+FOREIGN TERRITORY ACCESS: their claimed land opens ONLY via conquest (war) OR trade track (trade agreement / alliance / friendly). First contact alone does NOT open borders.
+Curious villagers MAY scout unclaimed wilderness toward them. NEVER enter their claimed territory unless war or trade/open borders is YES.` : `
 ANOTHER TRIBE is rumored to live somewhere on this continent. You have not made contact yet.
 Curious, high-energy villagers SHOULD explore unclaimed wilderness (beyond your ${territoryRadius}-tile home lands, up to ~${exploreRange} tiles from your center) so the tribes can discover each other.
-Do not settle or socialize at an unknown village if you find one — report back.`;
+Do not enter another tribe's claimed land if you find it — report back. Claimed land opens later only through war (conquest) or trade/alliance.`;
 
     const prompt = `Generate actions for each villager in this tribal village simulation.
 
@@ -565,7 +567,7 @@ Output JSON with an "actions" array. Each action has:
 - interactionType: talk|argue|share|help|romance|gossip if applicable
 
 Rules:
-- TRIBAL BOUNDARIES: Daily life stays in ${villageName}'s home lands around (${center.x}, ${center.y}). Curious villagers may scout unclaimed wilderness. Never path into a rival village center unless at war or allied.
+- TRIBAL BOUNDARIES: Daily life stays in ${villageName}'s home lands around (${center.x}, ${center.y}). Curious villagers may scout unclaimed wilderness. Foreign claimed land opens ONLY via conquest (war) or trade track (trade/alliance/friendly) — never from discovery alone.
 - EXPLORATION: Assign at least one healthy curious villager to scouting/moveTo in unclaimed land between tribes when the other tribe is undiscovered.
 - SOCIAL BONDS: Only socialize with villagers from your own tribe listed above. Rival tribes are separate communities.
 - CRITICAL SURVIVAL PRIORITY: If ANY villager has hunger < 40, thirst < 40, or energy < 30, they MUST be assigned eating, drinking, gathering, hunting, fishing, or resting. NEVER assign idle, working, socializing, or building to a villager with critical needs.

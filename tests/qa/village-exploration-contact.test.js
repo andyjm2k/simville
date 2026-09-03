@@ -88,4 +88,50 @@ describe('QA: wilderness exploration and first contact', () => {
     expect(game.diplomaticEvents.length).toBeGreaterThan(0);
     expect(game.diplomaticEvents[0].type).not.toBeUndefined();
   });
+
+  it('keeps rival territory closed after first contact', () => {
+    const villageA = game.villages[0];
+    const villageB = game.villages[1];
+    const villager = game.getVillagersForVillage(villageA.id)[0];
+
+    game.explorationSystem.recordFirstContact(villageA, villageB, null, 'sighting');
+
+    expect(game.getForeignTerritoryAccess(villageA, villageB)).toBeNull();
+    expect(game.canVillagerEnterTerritory(
+      villager,
+      villageB.center.x,
+      villageB.center.y
+    )).toBe(false);
+    expect(villageA.hasTradePartner(villageB.id)).toBe(false);
+  });
+
+  it('opens rival territory on the trade track after a trade agreement', () => {
+    const villageA = game.villages[0];
+    const villageB = game.villages[1];
+    const villager = game.getVillagersForVillage(villageA.id)[0];
+
+    game.establishTradeAccess(villageA, villageB);
+
+    expect(game.getForeignTerritoryAccess(villageA, villageB)).toBe(CONSTANTS.TERRITORY_ACCESS.TRADE);
+    expect(game.canVillagerEnterTerritory(
+      villager,
+      villageB.center.x,
+      villageB.center.y
+    )).toBe(true);
+  });
+
+  it('opens rival territory on the conquest track during war', () => {
+    const villageA = game.villages[0];
+    const villageB = game.villages[1];
+    const villager = game.getVillagersForVillage(villageA.id)[0];
+
+    game.triggerWar(villageA.id, villageB.id);
+
+    expect(game.getForeignTerritoryAccess(villageA, villageB)).toBe(CONSTANTS.TERRITORY_ACCESS.WAR);
+    expect(game.canVillagerEnterTerritory(
+      villager,
+      villageB.center.x,
+      villageB.center.y
+    )).toBe(true);
+  });
 });

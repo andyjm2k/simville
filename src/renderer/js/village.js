@@ -57,6 +57,8 @@ class Village {
     this.lastScoutDay = data.lastScoutDay || 0;
     // Count of scout missions sent, used for rumor-based contact fallback
     this.scoutAttempts = data.scoutAttempts || 0;
+    // Trade-track partners with mutual open borders (not opened by first contact alone)
+    this.tradePartners = data.tradePartners || [];
   }
 
   createDefaultChronicle() {
@@ -130,6 +132,33 @@ class Village {
     if (this.knownVillages.includes(villageId)) return false;
     this.knownVillages.push(villageId);
     return true;
+  }
+
+  // True when a formal trade/alliance has opened peaceful border access
+  hasTradePartner(villageId) {
+    if (!villageId) return false;
+    if (!Array.isArray(this.tradePartners)) this.tradePartners = [];
+    return this.tradePartners.includes(villageId);
+  }
+
+  // Open trade-track borders with another village
+  addTradePartner(villageId) {
+    if (!villageId || villageId === this.id) return false;
+    if (!Array.isArray(this.tradePartners)) this.tradePartners = [];
+    if (this.tradePartners.includes(villageId)) return false;
+    this.tradePartners.push(villageId);
+    return true;
+  }
+
+  // Close trade-track borders (e.g. when war breaks out)
+  revokeTradePartner(villageId) {
+    if (!Array.isArray(this.tradePartners)) {
+      this.tradePartners = [];
+      return false;
+    }
+    const before = this.tradePartners.length;
+    this.tradePartners = this.tradePartners.filter(id => id !== villageId);
+    return this.tradePartners.length !== before;
   }
 
   // Get villagers from main villagers array (Game will hold actual villagers)
@@ -211,7 +240,8 @@ class Village {
       originalPopulation: this.originalPopulation,
       knownVillages: [...(this.knownVillages || [])],
       lastScoutDay: this.lastScoutDay || 0,
-      scoutAttempts: this.scoutAttempts || 0
+      scoutAttempts: this.scoutAttempts || 0,
+      tradePartners: [...(this.tradePartners || [])]
     };
   }
 

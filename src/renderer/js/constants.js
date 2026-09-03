@@ -515,6 +515,12 @@ const CONSTANTS = {
     HOSTILE_WAR_THRESHOLD_DAYS: 3 // Days of hostile relations before war triggers
   },
 
+  // Foreign claimed-land access tracks (wilderness is always open; home land always open)
+  TERRITORY_ACCESS: {
+    WAR: 'war',       // conquest track — at war
+    TRADE: 'trade'    // trade track — trade agreement / alliance / friendly
+  },
+
   // Wilderness scouting and first contact (beyond claimed tribal lands)
   EXPLORATION: {
     SIGHT_RANGE: 8,
@@ -580,5 +586,6 @@ Object.freeze(CONSTANTS.INTERACTION);
 Object.freeze(CONSTANTS.VILLAGE_RELATION);
 Object.freeze(CONSTANTS.WAR);
 Object.freeze(CONSTANTS.DIPLOMACY);
+Object.freeze(CONSTANTS.TERRITORY_ACCESS);
 Object.freeze(CONSTANTS.EXPLORATION);
 Object.freeze(CONSTANTS.VILLAGE);

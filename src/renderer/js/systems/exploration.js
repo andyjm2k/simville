@@ -224,10 +224,10 @@ class ExplorationSystem {
 
     const scoutName = scout?.name || 'Scouts';
     const text = kind === 'meeting'
-      ? `${scoutName} of ${villageA.name} has met people of ${villageB.name} in the wilds! The tribes now know of each other.`
+      ? `${scoutName} of ${villageA.name} has met people of ${villageB.name} in the wilds! The tribes now know of each other, but claimed lands stay closed until war or trade.`
       : kind === 'rumor'
-        ? `Word reaches ${villageA.name} and ${villageB.name}: another people live on this continent.`
-        : `${scoutName} of ${villageA.name} has sighted the lands of ${villageB.name}. First contact is made.`;
+        ? `Word reaches ${villageA.name} and ${villageB.name}: another people live on this continent. Borders remain closed until war or trade opens them.`
+        : `${scoutName} of ${villageA.name} has sighted the lands of ${villageB.name}. First contact is made — their territory stays closed until conquest or trade.`;
 
     this.game.addChronicleEntry(text, 'legendary', villageA.id);
     this.game.addChronicleEntry(text, 'legendary', villageB.id);

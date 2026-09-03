@@ -99,6 +99,22 @@ describe('Village', () => {
     expect(village.markVillageKnown('home')).toBe(false);
   });
 
+  it('manages trade partners for open-border access', () => {
+    const village = new Village({ id: 'home' });
+    expect(village.hasTradePartner('rival')).toBe(false);
+    expect(village.addTradePartner('rival')).toBe(true);
+    expect(village.hasTradePartner('rival')).toBe(true);
+    expect(village.addTradePartner('rival')).toBe(false);
+    expect(village.revokeTradePartner('rival')).toBe(true);
+    expect(village.hasTradePartner('rival')).toBe(false);
+  });
+
+  it('serializes trade partners', () => {
+    const village = new Village({ id: 'home', tradePartners: ['rival'] });
+    const restored = Village.deserialize(village.serialize());
+    expect(restored.tradePartners).toEqual(['rival']);
+  });
+
   it('filters villagers by villagerIds membership', () => {
     const village = new Village({ villagerIds: ['keep-me'] });
     const all = [
