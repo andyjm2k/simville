@@ -107,7 +107,11 @@ const CONSTANTS = {
     HUNGER_DECAY: 5,
     THIRST_DECAY: 7,
     REST_DECAY: 3,
-    SOCIAL_DECAY: 2
+    SOCIAL_DECAY: 2,
+    SOCIAL_RECOVERY: 28, // per game hour while socializing in range
+    SOCIAL_LONELY: 20,
+    SOCIAL_SEEK: 40,
+    SOCIAL_SATISFIED: 75
   },
 
   // Relationship bounds
@@ -533,7 +537,8 @@ const CONSTANTS = {
   // Conversation/interaction proximity requirement
   INTERACTION: {
     PROXIMITY_REQUIRED: 4, // Villagers must be within 4 tiles to interact
-    PROXIMITY_SPEECH_BUBBLE: 6 // Can see speech bubble from this distance
+    PROXIMITY_SPEECH_BUBBLE: 6, // Can see speech bubble from this distance
+    SOCIAL_RANGE: 8 // Nearby enough to restore social need (covers gathering at a fire)
   }
 };
 

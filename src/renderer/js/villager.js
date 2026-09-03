@@ -32,6 +32,7 @@ class Villager {
     this.status = data.status || CONSTANTS.ACTIVITY.IDLE;
     this.activity = data.activity || 'Idle';
     this.activityDuration = data.activityDuration || 0;
+    this.socialPartnerId = data.socialPartnerId || null;
 
     // Relationships (keyed by villager id; name keys migrated on access)
     this.relationships = data.relationships || {}; // { villagerId: score }
@@ -123,10 +124,10 @@ class Villager {
     }
 
     // Update needs
-    this.updateNeeds(deltaTime);
+    this.updateNeeds(deltaTime, villagers);
 
     // Update status based on needs
-    this.updateStatus();
+    this.updateStatus(villagers);
 
     // Update movement
     this.updateMovement(deltaTime, world);
@@ -161,25 +162,38 @@ class Villager {
     return null;
   }
 
-  updateNeeds(deltaTime) {
+  updateNeeds(deltaTime, villagers = []) {
     // Decay rates per game hour
     const hourFraction = deltaTime / (game?.timeState?.hourDuration || 600); // Assuming 10 min per hour
     const isEatingOrDrinking =
       this.status === CONSTANTS.ACTIVITY.EATING ||
       this.status === CONSTANTS.ACTIVITY.DRINKING;
+    const isResting =
+      this.status === CONSTANTS.ACTIVITY.SLEEPING ||
+      this.status === CONSTANTS.ACTIVITY.RESTING;
 
-    if (this.status !== CONSTANTS.ACTIVITY.SLEEPING && this.status !== CONSTANTS.ACTIVITY.RESTING) {
+    if (!isResting) {
       this.energy = Math.max(0, this.energy - CONSTANTS.NEED.REST_DECAY * hourFraction);
       // Exempt eating/drinking from hunger/thirst decay (avoid double-hit while recovering)
       if (!isEatingOrDrinking) {
         this.hunger = Math.max(0, this.hunger - CONSTANTS.NEED.HUNGER_DECAY * hourFraction);
         this.thirst = Math.max(0, this.thirst - CONSTANTS.NEED.THIRST_DECAY * hourFraction);
       }
-      this.socialNeed = Math.max(0, this.socialNeed - CONSTANTS.NEED.SOCIAL_DECAY * hourFraction);
     } else {
       // Recover energy while resting
       this.energy = Math.min(100, this.energy + 20 * hourFraction);
-      this.socialNeed = Math.min(100, this.socialNeed + 5 * hourFraction);
+    }
+
+    // Social restores only while chatting in range; sleeping no longer fills the bar
+    const socialPartner = this.getNearbySocialPartner(villagers);
+    if (this.status === CONSTANTS.ACTIVITY.SOCIALIZING && socialPartner) {
+      const recovery = CONSTANTS.NEED.SOCIAL_RECOVERY || 28;
+      this.socialNeed = Math.min(100, this.socialNeed + recovery * hourFraction);
+      if (!this.socialPartnerId) this.socialPartnerId = socialPartner.id;
+    } else if (isResting) {
+      this.socialNeed = Math.max(0, this.socialNeed - CONSTANTS.NEED.SOCIAL_DECAY * 0.25 * hourFraction);
+    } else {
+      this.socialNeed = Math.max(0, this.socialNeed - CONSTANTS.NEED.SOCIAL_DECAY * hourFraction);
     }
 
     // Recover hunger when eating. Food is consumed in small portions so eating
@@ -241,7 +255,7 @@ class Villager {
     }
   }
 
-  updateStatus() {
+  updateStatus(villagers = []) {
     // Determine status based on needs
     if (this.health <= 0) {
       this.status = CONSTANTS.ACTIVITY.IDLE; // Death handled elsewhere
@@ -256,6 +270,13 @@ class Villager {
     if (this.status === CONSTANTS.ACTIVITY.EATING && this.hunger >= 85) {
       this.status = CONSTANTS.ACTIVITY.IDLE;
       this.activity = 'Idle';
+    }
+
+    const socialSatisfied = CONSTANTS.NEED.SOCIAL_SATISFIED || 75;
+    if (this.status === CONSTANTS.ACTIVITY.SOCIALIZING && this.socialNeed >= socialSatisfied) {
+      this.status = CONSTANTS.ACTIVITY.IDLE;
+      this.activity = 'Idle';
+      this.socialPartnerId = null;
     }
 
     const criticalHunger = this.hunger < 25;
@@ -319,9 +340,25 @@ class Villager {
       return;
     }
 
-    if (this.socialNeed < 20 && this.personality.sociable > 50) {
-      this.status = CONSTANTS.ACTIVITY.SOCIALIZING;
-      this.activity = 'Feeling lonely, seeking company';
+    const lonelyThreshold = CONSTANTS.NEED.SOCIAL_LONELY || 20;
+    const seekThreshold = CONSTANTS.NEED.SOCIAL_SEEK || 40;
+    const sociable = this.personality?.sociable ?? 50;
+    const lonely = this.socialNeed < lonelyThreshold ||
+      (this.socialNeed < seekThreshold && sociable > 50);
+
+    if (lonely) {
+      // Stay in an in-progress meetup instead of repathing every tick (the social loop)
+      if (this.status === CONSTANTS.ACTIVITY.SOCIALIZING) {
+        const partner = this.getAssignedSocialPartner(villagers);
+        if (this.isMoving || this.getNearbySocialPartner(villagers)) return;
+        if (partner?.isMoving && partner.socialPartnerId === this.id) return;
+      }
+      if (game?.beginSocializing) {
+        game.beginSocializing(this);
+      } else {
+        this.status = CONSTANTS.ACTIVITY.SOCIALIZING;
+        this.activity = 'Feeling lonely, seeking company';
+      }
       return;
     }
   }
@@ -339,6 +376,7 @@ class Villager {
 
     // Natural wandering behavior when idle or after reaching destination
     if (!this.isMoving) {
+      if (this.isNeedLockedActivity()) return;
       this.wanderTimer += deltaTime;
       if (this.wanderTimer >= this.wanderInterval) {
         this.wanderTimer = 0;
@@ -369,7 +407,9 @@ class Villager {
           this.isMoving = false;
           this.x = target.x;
           this.y = target.y;
-          this.status = CONSTANTS.ACTIVITY.IDLE;
+          if (!this.isNeedLockedActivity()) {
+            this.status = CONSTANTS.ACTIVITY.IDLE;
+          }
           return;
         }
       } else {
@@ -442,6 +482,47 @@ class Villager {
     }
   }
 
+  isNeedLockedActivity(status = this.status) {
+    return [
+      CONSTANTS.ACTIVITY.EATING,
+      CONSTANTS.ACTIVITY.DRINKING,
+      CONSTANTS.ACTIVITY.SLEEPING,
+      CONSTANTS.ACTIVITY.RESTING,
+      CONSTANTS.ACTIVITY.SOCIALIZING,
+      CONSTANTS.ACTIVITY.RITUAL
+    ].includes(status);
+  }
+
+  getSocialRange() {
+    return CONSTANTS.INTERACTION.SOCIAL_RANGE || CONSTANTS.INTERACTION.PROXIMITY_REQUIRED || 4;
+  }
+
+  isWithinSocialRange(other) {
+    if (!other) return false;
+    return Utils.distance(this.x, this.y, other.x, other.y) <= this.getSocialRange();
+  }
+
+  getAssignedSocialPartner(villagers = []) {
+    if (!this.socialPartnerId) return null;
+    return villagers.find(other => other.id === this.socialPartnerId && other.health > 0) || null;
+  }
+
+  getNearbySocialPartner(villagers = []) {
+    const assigned = this.getAssignedSocialPartner(villagers);
+    const canSocialize = (other) => game?.canVillagersSocialize?.(this, other) !== false;
+    if (assigned && this.isWithinSocialRange(assigned) && canSocialize(assigned)) {
+      return assigned;
+    }
+
+    return villagers.find(other =>
+      other.id !== this.id &&
+      other.health > 0 &&
+      this.isWithinSocialRange(other) &&
+      canSocialize(other) &&
+      (other.status === CONSTANTS.ACTIVITY.SOCIALIZING || other.socialPartnerId === this.id)
+    ) || null;
+  }
+
   updateMood() {
     // Base mood from needs
     let mood = 50;
@@ -455,8 +536,13 @@ class Villager {
     // Energy contribution
     mood += (this.energy - 50) * 0.2;
 
-    // Social contribution
-    mood += (this.socialNeed - 50) * 0.2;
+    // Social contribution — isolation should visibly depress mood
+    mood += (this.socialNeed - 50) * 0.35;
+    if (this.socialNeed < 35) {
+      const isolation = 35 - this.socialNeed;
+      const sociableFactor = 0.85 + ((this.personality?.sociable || 50) / 100) * 0.7;
+      mood -= isolation * 1.15 * sociableFactor;
+    }
 
     // Relationship average
     if (Object.keys(this.relationships).length > 0) {
@@ -502,7 +588,9 @@ class Villager {
       this.isMoving = true;
       this.targetX = destination.x;
       this.targetY = destination.y;
-      this.status = CONSTANTS.ACTIVITY.WORKING; // Moving for a purpose
+      if (!this.isNeedLockedActivity()) {
+        this.status = CONSTANTS.ACTIVITY.WORKING; // Moving for a purpose
+      }
       return true;
     }
     return false;
@@ -699,6 +787,7 @@ class Villager {
       status: this.status,
       activity: this.activity,
       activityDuration: this.activityDuration,
+      socialPartnerId: this.socialPartnerId,
       ageProgress: this.ageProgress,
       needInterruptCooldown: this.needInterruptCooldown,
       relationships: this.relationships,

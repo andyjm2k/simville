@@ -115,6 +115,164 @@ class Game {
     return relation >= CONSTANTS.VILLAGE_RELATION.FRIENDLY_THRESHOLD;
   }
 
+  getSocialRange() {
+    return CONSTANTS.INTERACTION.SOCIAL_RANGE || CONSTANTS.INTERACTION.PROXIMITY_REQUIRED || 4;
+  }
+
+  isPartnerTooBusyToSocialize(partner) {
+    if (!partner || partner.health <= 0) return true;
+    if (partner.currentAction?.survivalTask) return true;
+    return [
+      CONSTANTS.ACTIVITY.EATING,
+      CONSTANTS.ACTIVITY.DRINKING,
+      CONSTANTS.ACTIVITY.SLEEPING
+    ].includes(partner.status);
+  }
+
+  findSocialPartner(villager, preferred = null) {
+    if (preferred && this.canVillagersSocialize(villager, preferred) && preferred.health > 0) {
+      return preferred;
+    }
+
+    const candidates = this.villagers.filter(other =>
+      other.health > 0 && this.canVillagersSocialize(villager, other)
+    );
+    if (!candidates.length) return null;
+
+    const existing = candidates.find(other => other.id === villager.socialPartnerId);
+    if (existing) return existing;
+
+    const incoming = candidates.find(other => other.socialPartnerId === villager.id);
+    if (incoming) return incoming;
+
+    return candidates.sort((a, b) => {
+      const distA = Utils.distance(villager.x, villager.y, a.x, a.y);
+      const distB = Utils.distance(villager.x, villager.y, b.x, b.y);
+      const lonelyA = a.socialNeed < (CONSTANTS.NEED.SOCIAL_SEEK || 40) ? -8 : 0;
+      const lonelyB = b.socialNeed < (CONSTANTS.NEED.SOCIAL_SEEK || 40) ? -8 : 0;
+      return (distA + lonelyA - villager.getRelationship(a) * 0.05) -
+        (distB + lonelyB - villager.getRelationship(b) * 0.05);
+    })[0] || null;
+  }
+
+  getSocialMeetupPoint(villager, partner) {
+    const village = this.getVillage(villager.villageId);
+    const fire = this.world?.structures?.find(s =>
+      s.type === 'fire' && village?.structureIds?.includes(s.id)
+    );
+    if (fire && (!village || village.isInTerritory(fire.x, fire.y))) {
+      return { x: fire.x, y: fire.y };
+    }
+
+    const mid = {
+      x: Math.round((villager.x + partner.x) / 2),
+      y: Math.round((villager.y + partner.y) / 2)
+    };
+    if (village && !village.isInTerritory(mid.x, mid.y)) {
+      return { x: village.center.x, y: village.center.y };
+    }
+    return mid;
+  }
+
+  beginSocializing(villager, target = null) {
+    if (!villager || villager.health <= 0) return false;
+
+    const partner = this.findSocialPartner(villager, target);
+    villager.status = CONSTANTS.ACTIVITY.SOCIALIZING;
+
+    if (!partner) {
+      villager.activity = 'Feeling lonely, seeking company';
+      villager.socialPartnerId = null;
+      return false;
+    }
+
+    const alreadyPaired = villager.socialPartnerId === partner.id;
+    const range = this.getSocialRange();
+    const dist = Utils.distance(villager.x, villager.y, partner.x, partner.y);
+    const inRange = dist <= range;
+
+    villager.socialPartnerId = partner.id;
+    villager.activity = `Spending time with ${partner.name}`;
+
+    if (inRange) {
+      villager.stopMoving();
+      if (!this.isPartnerTooBusyToSocialize(partner)) {
+        partner.socialPartnerId = partner.socialPartnerId || villager.id;
+        partner.status = CONSTANTS.ACTIVITY.SOCIALIZING;
+        partner.activity = `Spending time with ${villager.name}`;
+        partner.stopMoving();
+      }
+      return true;
+    }
+
+    // Already walking to this meetup — do not repath every tick
+    if (alreadyPaired && villager.isMoving) return true;
+    if (alreadyPaired && partner.isMoving && partner.socialPartnerId === villager.id) return true;
+
+    // Both arrived but still too far: walk to the stationary partner instead of chasing
+    if (alreadyPaired && !villager.isMoving && !partner.isMoving) {
+      villager.moveTo(partner.x, partner.y, this.world);
+      villager.status = CONSTANTS.ACTIVITY.SOCIALIZING;
+      villager.activity = `Spending time with ${partner.name}`;
+      return true;
+    }
+
+    const meetup = this.getSocialMeetupPoint(villager, partner);
+    villager.moveTo(meetup.x, meetup.y, this.world);
+    villager.status = CONSTANTS.ACTIVITY.SOCIALIZING;
+    villager.activity = `Spending time with ${partner.name}`;
+
+    if (!this.isPartnerTooBusyToSocialize(partner)) {
+      const partnerAlreadyComing = partner.socialPartnerId === villager.id && partner.isMoving;
+      if (!partnerAlreadyComing) {
+        partner.socialPartnerId = partner.socialPartnerId || villager.id;
+        partner.moveTo(meetup.x, meetup.y, this.world);
+        partner.status = CONSTANTS.ACTIVITY.SOCIALIZING;
+        partner.activity = `Spending time with ${villager.name}`;
+      }
+    }
+
+    return true;
+  }
+
+  applySocialVillagerAction(villager, action) {
+    const wantsSocial = action?.action === CONSTANTS.ACTIVITY.SOCIALIZING || !!action?.interactionTarget;
+    if (!wantsSocial) return null;
+
+    const named = action.interactionTarget || (typeof action.target === 'string' ? action.target : null);
+    const namedTarget = named
+      ? this.villagers.find(v => v.name === named || v.id === named)
+      : null;
+    const partner = this.findSocialPartner(villager, namedTarget);
+
+    const socialAction = { ...action, action: CONSTANTS.ACTIVITY.SOCIALIZING };
+    delete socialAction.moveTo;
+    villager.applyAction(socialAction);
+    this.beginSocializing(villager, partner);
+
+    if (!partner) return { handled: true };
+
+    const dist = Utils.distance(villager.x, villager.y, partner.x, partner.y);
+    if (dist > this.getSocialRange()) return { handled: true };
+
+    const relChange = action.interactionType === 'argue' ? -5 : 3;
+    villager.modifyRelationship(partner.id, relChange);
+    partner.modifyRelationship(villager.id, relChange);
+
+    let notable = null;
+    if (action.interactionType === 'argue') {
+      notable = { text: `${villager.name} and ${partner.name} had a disagreement.`, type: 'conflict' };
+    } else if (action.interactionType === 'share') {
+      notable = { text: `${villager.name} shared something with ${partner.name}.`, type: 'normal' };
+    } else if (action.interactionType === 'romance') {
+      notable = { text: `${villager.name} and ${partner.name} shared a tender moment.`, type: 'celebration' };
+    } else if (action.interactionType === 'help') {
+      notable = { text: `${villager.name} helped ${partner.name} with a task.`, type: 'normal' };
+    }
+
+    return { handled: true, notable };
+  }
+
   getVillagerVillageCenter(villager) {
     const village = this.getVillage(villager?.villageId);
     return village?.center || this.world?.villageCenter || { x: 32, y: 32 };
@@ -2109,14 +2267,17 @@ class Game {
     }
 
     goal.targetName = target.name;
-    villager.status = CONSTANTS.ACTIVITY.SOCIALIZING;
-    villager.activity = `Spending time with ${target.name} for goal`;
+    this.beginSocializing(villager, target);
     villager.currentAction = { action: CONSTANTS.ACTIVITY.SOCIALIZING, goalId: goal.id, goalDescription: goal.description };
-    villager.moveTo(target.x, target.y, this.world);
-    villager.modifyRelationship(target.name, 2);
-    target.modifyRelationship(villager.name, 1);
-    villager.addInteraction('talk', target.name, `Worked on personal goal: ${goal.description}`);
-    villager.showSpeechBubble('💬', `Talking with ${target.name}`, 3500);
+    const inRange = Utils.distance(villager.x, villager.y, target.x, target.y) <= this.getSocialRange();
+    if (inRange) {
+      villager.modifyRelationship(target.name, 2);
+      target.modifyRelationship(villager.name, 1);
+      villager.addInteraction('talk', target.name, `Worked on personal goal: ${goal.description}`);
+      villager.showSpeechBubble('💬', `Talking with ${target.name}`, 3500);
+    } else {
+      villager.showSpeechBubble('💬', `Looking for ${target.name}`, 2500);
+    }
     this.advanceGoal(villager, goal, 7, `Built a bond with ${target.name}`);
   }
 
@@ -2493,6 +2654,12 @@ class Game {
         continue;
       }
 
+      const socialResult = this.applySocialVillagerAction(villager, action);
+      if (socialResult) {
+        applied += 1;
+        continue;
+      }
+
       villager.applyAction(action);
       applied += 1;
 
@@ -2518,18 +2685,6 @@ class Game {
           this.chooseNeededStructure();
         if (requestedStructure) {
           this.startConstructionProject(requestedStructure, { source: 'villager', builderId: villager.id });
-        }
-      }
-
-      if (action.interactionTarget) {
-        const target = this.villagers.find(v => v.name === action.interactionTarget || v.id === action.interactionTarget);
-        if (target && this.canVillagersSocialize(villager, target)) {
-          const dist = Utils.distance(villager.x, villager.y, target.x, target.y);
-          if (dist <= CONSTANTS.INTERACTION.PROXIMITY_REQUIRED) {
-            const relChange = action.interactionType === 'argue' ? -5 : 3;
-            villager.modifyRelationship(target.id, relChange);
-            target.modifyRelationship(villager.id, relChange);
-          }
         }
       }
     }
@@ -2762,6 +2917,12 @@ class Game {
             }
           }
 
+          const socialResult = this.applySocialVillagerAction(villager, action);
+          if (socialResult) {
+            if (socialResult.notable) notableEvents.push(socialResult.notable);
+            continue;
+          }
+
           villager.applyAction(action);
 
           // Handle movement
@@ -2815,52 +2976,6 @@ class Game {
                 text: `${villager.name} marked out ground for a new ${requestedStructure}.`,
                 type: 'normal'
               });
-            }
-          }
-
-          // Handle social interaction - record notable ones (only if within proximity)
-          if (action.interactionTarget) {
-            const target = this.villagers.find(v => v.name === action.interactionTarget);
-            if (target && this.canVillagersSocialize(villager, target)) {
-              // Check proximity - villagers must be within range to interact
-              const dist = Utils.distance(villager.x, villager.y, target.x, target.y);
-              if (dist > CONSTANTS.INTERACTION.PROXIMITY_REQUIRED) {
-                // Too far away - cancel the interaction
-                villager.showSpeechBubble('🚫', 'Too far to talk');
-                continue; // Skip this action entirely
-              }
-
-              const relChange = action.interactionType === 'argue' ? -5 : 3;
-              villager.modifyRelationship(target.name, relChange);
-              target.modifyRelationship(villager.name, relChange);
-
-              // Show speech bubbles for interactions
-              if (action.speechEmoji) {
-                villager.showSpeechBubble(action.speechEmoji, action.speechTheme || 'Interacting');
-              }
-
-              // Record significant social events
-              if (action.interactionType === 'argue') {
-                notableEvents.push({
-                  text: `${villager.name} and ${target.name} had a disagreement.`,
-                  type: 'conflict'
-                });
-              } else if (action.interactionType === 'share') {
-                notableEvents.push({
-                  text: `${villager.name} shared something with ${target.name}.`,
-                  type: 'normal'
-                });
-              } else if (action.interactionType === 'romance') {
-                notableEvents.push({
-                  text: `${villager.name} and ${target.name} shared a tender moment.`,
-                  type: 'celebration'
-                });
-              } else if (action.interactionType === 'help') {
-                notableEvents.push({
-                  text: `${villager.name} helped ${target.name} with a task.`,
-                  type: 'normal'
-                });
-              }
             }
           }
 
@@ -2964,7 +3079,8 @@ class Game {
         v.lifeStage?.canWork !== false &&
         v.status !== CONSTANTS.ACTIVITY.EATING &&
         v.status !== CONSTANTS.ACTIVITY.SLEEPING &&
-        v.status !== CONSTANTS.ACTIVITY.RESTING
+        v.status !== CONSTANTS.ACTIVITY.RESTING &&
+        v.status !== CONSTANTS.ACTIVITY.SOCIALIZING
       )
       .sort((a, b) => {
         const aSkill = Math.max(a.skills.gathering || 0, a.skills.hunting || 0, a.skills.fishing || 0);
