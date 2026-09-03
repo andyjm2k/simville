@@ -509,7 +509,8 @@ class Villager {
 
   getNearbySocialPartner(villagers = []) {
     const assigned = this.getAssignedSocialPartner(villagers);
-    const canSocialize = (other) => game?.canVillagersSocialize?.(this, other) !== false;
+    const host = (typeof game !== 'undefined' ? game : globalThis.game) || null;
+    const canSocialize = (other) => !host?.canVillagersSocialize || host.canVillagersSocialize(this, other);
     if (assigned && this.isWithinSocialRange(assigned) && canSocialize(assigned)) {
       return assigned;
     }
