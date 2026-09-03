@@ -460,14 +460,83 @@ Output JSON with: type, description, secrecyLevel (1-5), discoveryTriggers, targ
     const result = await this.generate(prompt);
 
     if (result && result.type) {
-      return {
+      return this.normalizeSecret({
         ...result,
         revealed: false,
         discoveredBy: []
-      };
+      }, villager, otherVillagers);
     }
 
-    return null;
+    // Offline / failed LLM: still give the villager a playable secret
+    return this.generateFallbackSecret(villager, otherVillagers);
+  }
+
+  /** Normalize LLM or fallback secret payloads into a consistent shape. */
+  normalizeSecret(secret, villager, otherVillagers = []) {
+    const validTypes = Object.values(CONSTANTS.SECRET);
+    const type = validTypes.includes(secret.type) ? secret.type : CONSTANTS.SECRET.HIDDEN_TALENT;
+    const secrecyLevel = Utils.clamp(Number(secret.secrecyLevel) || 3, 1, 5);
+    const discoveryTriggers = Array.isArray(secret.discoveryTriggers) && secret.discoveryTriggers.length
+      ? secret.discoveryTriggers
+      : ['high_relationship', 'crisis_event'];
+
+    let target = secret.target || null;
+    if (typeof target === 'string' && otherVillagers.length) {
+      const match = otherVillagers.find(v => v.id === target || v.name === target);
+      target = match ? match.id : target;
+    }
+
+    return {
+      type,
+      description: secret.description || this.describeFallbackSecret(type, villager, otherVillagers),
+      secrecyLevel,
+      discoveryTriggers,
+      target,
+      revealed: secret.revealed === true,
+      discoveredBy: Array.isArray(secret.discoveredBy) ? secret.discoveredBy : []
+    };
+  }
+
+  /** Deterministic-enough secret when the LLM is unavailable. */
+  generateFallbackSecret(villager, otherVillagers = []) {
+    const types = Object.values(CONSTANTS.SECRET).filter(t => t !== CONSTANTS.SECRET.FORBIDDEN_ROMANCE);
+    const type = Utils.randomElement(types) || CONSTANTS.SECRET.HIDDEN_TALENT;
+    const tribeMates = otherVillagers.filter(v => !villager.villageId || v.villageId === villager.villageId);
+    const targetVillager = Utils.randomElement(tribeMates);
+
+    return this.normalizeSecret({
+      type,
+      description: this.describeFallbackSecret(type, villager, tribeMates, targetVillager),
+      secrecyLevel: Utils.randomInt(2, 4),
+      discoveryTriggers: ['high_relationship', 'crisis_event', 'shared_confidence'],
+      target: targetVillager?.id || null,
+      revealed: false,
+      discoveredBy: []
+    }, villager, tribeMates);
+  }
+
+  describeFallbackSecret(type, villager, otherVillagers = [], targetVillager = null) {
+    const other = targetVillager || Utils.randomElement(otherVillagers);
+    const otherName = other?.name || 'another villager';
+
+    switch (type) {
+      case CONSTANTS.SECRET.HIDDEN_TALENT:
+        return `${villager.name} secretly practices a rare craft away from the fire circle.`;
+      case CONSTANTS.SECRET.PAST_BETRAYAL:
+        return `${villager.name} once betrayed ${otherName}'s trust and has never confessed.`;
+      case CONSTANTS.SECRET.HIDDEN_STASH:
+        return `${villager.name} keeps a hidden stash of food and tools beyond the village stores.`;
+      case CONSTANTS.SECRET.ILLNESS:
+        return `${villager.name} hides a lingering illness from the tribe.`;
+      case CONSTANTS.SECRET.ASPIRATION:
+        return `${villager.name} dreams of leaving a lasting mark on the tribe but fears saying so.`;
+      case CONSTANTS.SECRET.GRUDGE:
+        return `${villager.name} nurses a quiet grudge against ${otherName}.`;
+      case CONSTANTS.SECRET.FORBIDDEN_ROMANCE:
+        return `${villager.name} harbors forbidden feelings for ${otherName}.`;
+      default:
+        return `${villager.name} carries a private burden they will not share.`;
+    }
   }
 
   // Generate chronicle entry

@@ -696,7 +696,9 @@ class UIManager {
     legendaryEntries.forEach(entry => {
       const li = document.createElement('li');
       li.className = 'legendary-item';
-      li.textContent = `★ ${entry.title} (Day ${entry.day})`;
+      // Prefer title; fall back to text so incomplete saves never show "undefined"
+      const label = entry.title || entry.text || 'Untitled Legend';
+      li.textContent = `★ ${label} (Day ${entry.day ?? '?'})`;
       this.elements.chronicleLegendaryList.appendChild(li);
     });
 

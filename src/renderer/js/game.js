@@ -309,6 +309,15 @@ class Game {
     villager.modifyRelationship(partner.id, relChange);
     partner.modifyRelationship(villager.id, relChange);
 
+    // Sharing confidences can uncover secrets during socializing
+    if (action.interactionType === 'share' || action.interactionType === 'help') {
+      this.tryDiscoverSecretThroughSocializing(villager, partner, 'shared_confidence');
+      this.tryDiscoverSecretThroughSocializing(partner, villager, 'shared_confidence');
+    } else if (action.interactionType === 'romance') {
+      this.tryDiscoverSecretThroughSocializing(villager, partner, 'high_relationship');
+      this.tryDiscoverSecretThroughSocializing(partner, villager, 'high_relationship');
+    }
+
     let notable = null;
     if (action.interactionType === 'argue') {
       notable = { text: `${villager.name} and ${partner.name} had a disagreement.`, type: 'conflict' };
@@ -469,7 +478,14 @@ class Game {
     this.addChronicleEntry(
       `${losingVillage.name} falls to ${winningVillage.name}. The tribe's independence is lost.`,
       'legendary',
-      losingVillageId
+      losingVillageId,
+      { legendaryTitle: `Fall of ${losingVillage.name}` }
+    );
+    // Winning tribe also records the conquest among its legends
+    this.addLegendaryEntry(
+      `Conquest of ${losingVillage.name}`,
+      `The ${losingVillage.name} has been conquered by ${winningVillage.name}! The era of ${losingVillage.name} ends as its people merge with their new allies.`,
+      winningVillageId
     );
 
     // Transfer resources before village is removed
@@ -1178,7 +1194,7 @@ class Game {
         this.refreshSelectedVillagerNarrative(villager);
         console.log('  Got goals for', villager.name);
 
-        // Generate a secret for some villagers
+        // Generate a secret for some villagers (LLM or deterministic fallback)
         if (Math.random() < 0.4) {
           const otherVillagers = this.villagers.filter(v => v.id !== villager.id);
           const secret = await llm.generateSecret(villager, otherVillagers);
@@ -1193,6 +1209,10 @@ class Game {
         // Use fallback values to prevent game state corruption
         villager.backstory = villager.backstory || llm.generateFallbackBackstory(villager);
         villager.goals = this.normalizeGoals(villager.goals?.length ? villager.goals : this.getFallbackGoals(villager), villager);
+        if ((!villager.secrets || villager.secrets.length === 0) && Math.random() < 0.4) {
+          const otherVillagers = this.villagers.filter(v => v.id !== villager.id);
+          villager.secrets = [llm.generateFallbackSecret(villager, otherVillagers)];
+        }
         this.refreshSelectedVillagerNarrative(villager);
       }
     }
@@ -1774,7 +1794,8 @@ class Game {
       }
     }
 
-    // Gossip spread for revealed secrets (start of P3)
+    // Gossip and secret discovery (secrets must be exercised beyond affairs alone)
+    this.processSecretDiscoveries();
     this.processGossipSpread();
   }
 
@@ -1794,6 +1815,191 @@ class Game {
     });
   }
 
+  /**
+   * Daily pass: try to discover unrevealed secrets through relationships, crisis, and proximity.
+   */
+  processSecretDiscoveries() {
+    for (const owner of this.villagers) {
+      const secrets = owner.secrets || [];
+      if (secrets.length === 0) continue;
+
+      const tribeMates = this.getVillagersForVillage(owner.villageId)
+        .filter(v => v.id !== owner.id);
+      if (tribeMates.length === 0) continue;
+
+      for (const secret of secrets) {
+        if (secret.revealed) continue;
+
+        const discoverer = this.findSecretDiscoverer(owner, secret, tribeMates);
+        if (discoverer) {
+          this.revealSecret(owner, secret, discoverer);
+        }
+      }
+    }
+  }
+
+  /** Pick a tribe-mate who has a fair chance to uncover this secret today. */
+  findSecretDiscoverer(owner, secret, tribeMates) {
+    const triggers = secret.discoveryTriggers || ['high_relationship', 'crisis_event'];
+    const secrecy = Utils.clamp(Number(secret.secrecyLevel) || 3, 1, 5);
+    const candidates = Utils.shuffle([...tribeMates]);
+
+    for (const other of candidates) {
+      const relationship = owner.getRelationship?.(other) ?? owner.relationships?.[other.id] ?? 0;
+      const near = Utils.distance(owner.x, owner.y, other.x, other.y) <= 5;
+      const socializing = near && (
+        owner.status === CONSTANTS.ACTIVITY.SOCIALIZING ||
+        other.status === CONSTANTS.ACTIVITY.SOCIALIZING
+      );
+
+      // High trust unlocks secrets more easily for low secrecyLevel
+      if (triggers.includes('high_relationship') || triggers.includes('shared_confidence')) {
+        const threshold = 45 + secrecy * 8;
+        const chance = 0.06 + Math.max(0, relationship - threshold) / 200;
+        if (relationship >= threshold && Math.random() < chance) {
+          return other;
+        }
+      }
+
+      // Crisis moments (illness, despair) make people slip
+      if (triggers.includes('crisis_event')) {
+        const inCrisis = owner.mood < -35 || owner.health < 35 || (owner.hunger ?? 100) < 20;
+        if (inCrisis && near && Math.random() < 0.18 / secrecy) {
+          return other;
+        }
+      }
+
+      // Close socializing can accidentally surface a secret
+      if (socializing && Math.random() < 0.05 / secrecy) {
+        return other;
+      }
+
+      // Target of a grudge/betrayal is more likely to piece it together
+      if (secret.target && (secret.target === other.id || secret.target === other.name)) {
+        if (relationship < 20 && Math.random() < 0.1) {
+          return other;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Attempt discovery during a social action (share / romance / help).
+   * @returns {boolean} whether a secret was revealed
+   */
+  tryDiscoverSecretThroughSocializing(owner, listener, trigger = 'shared_confidence') {
+    if (!owner || !listener || owner.id === listener.id) return false;
+    if (!this.areSameTribe(owner, listener)) return false;
+
+    const secrets = (owner.secrets || []).filter(s => !s.revealed);
+    if (secrets.length === 0) return false;
+
+    const secret = Utils.randomElement(secrets);
+    const triggers = secret.discoveryTriggers || [];
+    const secrecy = Utils.clamp(Number(secret.secrecyLevel) || 3, 1, 5);
+    const relationship = owner.getRelationship?.(listener) ?? owner.relationships?.[listener.id] ?? 0;
+
+    const triggerMatches = triggers.includes(trigger) ||
+      triggers.includes('high_relationship') ||
+      trigger === 'shared_confidence';
+    if (!triggerMatches) return false;
+
+    const baseChance = trigger === 'shared_confidence' ? 0.28 : 0.16;
+    const chance = baseChance * (1 - (secrecy - 1) * 0.12) * (0.6 + Math.min(1, relationship / 100));
+    if (Math.random() > chance) return false;
+
+    this.revealSecret(owner, secret, listener);
+    return true;
+  }
+
+  /** Mark a secret revealed, apply effects, chronicle it, and seed gossip. */
+  revealSecret(owner, secret, discoverer = null) {
+    if (!owner || !secret || secret.revealed) return;
+
+    secret.revealed = true;
+    if (!secret.discoveredBy) secret.discoveredBy = [];
+    if (discoverer && !secret.discoveredBy.includes(discoverer.id) && !secret.discoveredBy.includes(discoverer.name)) {
+      secret.discoveredBy.push(discoverer.id);
+    }
+
+    this.applySecretRevelationEffects(owner, secret, discoverer);
+
+    const chronicleText = discoverer
+      ? `${discoverer.name} has uncovered a secret about ${owner.name}: ${secret.description}`
+      : `A secret about ${owner.name} has come to light: ${secret.description}`;
+    this.addChronicleEntry(chronicleText, 'normal', owner.villageId);
+
+    discoverer?.showSpeechBubble?.('😮', Utils.truncate(secret.description, 36), 5000);
+    owner.showSpeechBubble?.('😳', 'My secret...', 4000);
+    this.refreshSelectedVillagerNarrative(owner);
+  }
+
+  /** Personality/relationship consequences when a secret surfaces. */
+  applySecretRevelationEffects(owner, secret, discoverer) {
+    const target = secret.target
+      ? this.villagers.find(v => v.id === secret.target || v.name === secret.target)
+      : null;
+
+    switch (secret.type) {
+      case CONSTANTS.SECRET.HIDDEN_TALENT:
+        owner.mood = Math.min(100, owner.mood + 8);
+        if (discoverer) this.modifyMutualRelationship(owner, discoverer, 4);
+        break;
+      case CONSTANTS.SECRET.PAST_BETRAYAL:
+        owner.mood = Math.max(-100, owner.mood - 10);
+        if (target) this.modifyMutualRelationship(owner, target, -18);
+        if (discoverer && target && discoverer.id !== target.id) {
+          this.modifyMutualRelationship(discoverer, owner, -4);
+        }
+        break;
+      case CONSTANTS.SECRET.HIDDEN_STASH: {
+        owner.mood = Math.max(-100, owner.mood - 6);
+        const village = this.getVillage(owner.villageId);
+        if (village?.resources) {
+          const foodGain = Utils.randomInt(2, 5);
+          village.resources.food = (village.resources.food || 0) + foodGain;
+        }
+        if (discoverer) this.modifyMutualRelationship(owner, discoverer, -3);
+        break;
+      }
+      case CONSTANTS.SECRET.ILLNESS:
+        owner.health = Math.max(1, owner.health - Utils.randomFloat(2, 6));
+        owner.mood = Math.max(-100, owner.mood - 5);
+        if (discoverer) this.modifyMutualRelationship(owner, discoverer, 3);
+        break;
+      case CONSTANTS.SECRET.ASPIRATION:
+        owner.mood = Math.min(100, owner.mood + 5);
+        if (discoverer) this.modifyMutualRelationship(owner, discoverer, 5);
+        break;
+      case CONSTANTS.SECRET.GRUDGE:
+        if (target) this.modifyMutualRelationship(owner, target, -8);
+        if (discoverer && target && discoverer.id === target.id) {
+          discoverer.mood = Math.max(-100, discoverer.mood - 6);
+        }
+        break;
+      case CONSTANTS.SECRET.FORBIDDEN_ROMANCE:
+        owner.mood = Math.max(-100, owner.mood - 8);
+        break;
+      default:
+        if (discoverer) this.modifyMutualRelationship(owner, discoverer, 1);
+        break;
+    }
+
+    // Chain reaction: revealing one secret can make others slip sooner
+    if (discoverer) {
+      for (const otherSecret of (owner.secrets || [])) {
+        if (otherSecret === secret || otherSecret.revealed) continue;
+        const triggers = otherSecret.discoveryTriggers || [];
+        if (triggers.includes('other_secret_revealed') && Math.random() < 0.2) {
+          this.revealSecret(owner, otherSecret, discoverer);
+          break;
+        }
+      }
+    }
+  }
+
   async processGossipSpread() {
     for (const owner of this.villagers) {
       for (const secret of (owner.secrets || [])) {
@@ -1804,7 +2010,8 @@ class Game {
           .map(key => this.villagers.find(v => v.id === key || v.name === key))
           .filter(Boolean)];
 
-        const candidates = this.villagers.filter(v => {
+        // Gossip stays inside the tribe that owns the secret
+        const candidates = this.getVillagersForVillage(owner.villageId).filter(v => {
           if (v.id === owner.id) return false;
           if ((v.personality?.sociable || 0) < 45) return false;
           if (discovered.includes(v.id) || discovered.includes(v.name)) return false;
@@ -1833,7 +2040,7 @@ class Game {
             gossipText = `${spreader.name} shares whispers about ${owner.name} with ${listener.name}.`;
           }
           listener.showSpeechBubble?.('🗣️', Utils.truncate(gossipText, 40), 5000);
-          this.addChronicleEntry(gossipText);
+          this.addChronicleEntry(gossipText, 'normal', owner.villageId);
         }
       }
     }
@@ -3828,11 +4035,12 @@ Respond with JSON: {
     const leaderText = villager.isChieftan ? 'The village mourns its leader.' : 'They will be remembered.';
     const chronicleText = `${villager.name} has passed away${causeText}. ${leaderText}`;
 
-    this.addChronicleEntry(chronicleText, isLegendary ? 'legendary' : 'normal', villager.villageId);
-
-    if (isLegendary) {
-      this.addLegendaryEntry(`${villager.name}'s Legacy`, chronicleText, villager.villageId);
-    }
+    this.addChronicleEntry(
+      chronicleText,
+      isLegendary ? 'legendary' : 'normal',
+      villager.villageId,
+      isLegendary ? { legendaryTitle: `${villager.name}'s Legacy` } : undefined
+    );
 
     const partner = this.villagers.find(v => v.id === villager.partnerId);
     if (partner) {
@@ -4412,11 +4620,12 @@ Respond with JSON: {
       this.ui.showToast(`New Technology: ${tech.name}!`);
     }
 
-    village.chronicle.legendary.unshift({
-      day: this.timeState.day,
-      text: `Discovered ${tech.name}: ${tech.description}`
-    });
-    this.chronicleDirty = true;
+    // Record the discovery in Legends with an explicit title (avoids "undefined" UI)
+    this.addLegendaryEntry(
+      `Discovery: ${tech.name}`,
+      `Discovered ${tech.name}: ${tech.description}`,
+      village.id
+    );
   }
 
   async requestTechDecision() {
@@ -4648,7 +4857,7 @@ Respond with JSON: {
     }
   }
 
-  addChronicleEntry(text, type = 'normal', villageId = null) {
+  addChronicleEntry(text, type = 'normal', villageId = null, options = {}) {
     if (this.benchmarkMode) return;
     const resolvedId = villageId || this.hudVillageId || this.villages[0]?.id;
     const village = this.getVillage(resolvedId);
@@ -4667,9 +4876,24 @@ Respond with JSON: {
       village.chronicle.entries.pop();
     }
 
+    // Legendary events must also appear in the Legends section (with a real title)
+    if (type === 'legendary') {
+      const title = options.legendaryTitle || this.deriveLegendaryTitle(text);
+      this.addLegendaryEntry(title, text, village.id);
+    }
+
     if (type === 'legendary' || type === 'celebration') {
       this.enrichChronicleEntry(entry, village.id).catch(() => {});
     }
+  }
+
+  /** Build a short legend title from chronicle text when none is provided. */
+  deriveLegendaryTitle(text) {
+    if (!text || typeof text !== 'string') return 'A Village Legend';
+    const cleaned = text.replace(/\s+/g, ' ').trim();
+    const firstClause = cleaned.split(/[.!?]/)[0]?.trim() || cleaned;
+    if (firstClause.length <= 48) return firstClause || 'A Village Legend';
+    return `${firstClause.slice(0, 45).trim()}…`;
   }
 
   async enrichChronicleEntry(entry, villageId = null) {
@@ -4701,10 +4925,19 @@ Respond with JSON: {
     const village = this.getVillage(resolvedId);
     if (!village) return;
 
+    const safeTitle = (title && String(title).trim()) || this.deriveLegendaryTitle(text);
+    const day = this.timeState.day;
+
+    // Avoid duplicate legend rows for the same event on the same day
+    const duplicate = village.chronicle.legendary.some(
+      entry => entry.day === day && (entry.text === text || entry.title === safeTitle)
+    );
+    if (duplicate) return;
+
     village.chronicle.legendary.unshift({
-      title,
+      title: safeTitle,
       text,
-      day: this.timeState.day
+      day
     });
     this.chronicleDirty = true;
 
