@@ -229,8 +229,9 @@ class ExplorationSystem {
         ? `Word reaches ${villageA.name} and ${villageB.name}: another people live on this continent. Borders remain closed until war or trade opens them.`
         : `${scoutName} of ${villageA.name} has sighted the lands of ${villageB.name}. First contact is made — their territory stays closed until conquest or trade.`;
 
-    this.game.addChronicleEntry(text, 'legendary', villageA.id);
-    this.game.addChronicleEntry(text, 'legendary', villageB.id);
+    const legendTitle = `First Contact: ${villageA.name} & ${villageB.name}`;
+    this.game.addChronicleEntry(text, 'legendary', villageA.id, { legendaryTitle: legendTitle });
+    this.game.addChronicleEntry(text, 'legendary', villageB.id, { legendaryTitle: legendTitle });
     scout?.showSpeechBubble?.('😮', 'Another tribe!', 5000);
     return true;
   }
