@@ -24,6 +24,7 @@ const SYSTEM_SCRIPT_ORDER = [
   'systems/economy.js',
   'systems/raid.js',
   'systems/diplomacy.js',
+  'systems/exploration.js',
   'systems/baseline-agent.js',
   'systems/benchmark.js'
 ];
@@ -39,6 +40,7 @@ const SCRIPT_EXPORTS = {
   'systems/economy.js': ['Economy'],
   'systems/raid.js': ['RaidSystem'],
   'systems/diplomacy.js': ['DiplomacySystem'],
+  'systems/exploration.js': ['ExplorationSystem'],
   'systems/baseline-agent.js': ['BaselineAgent'],
   'systems/benchmark.js': ['BenchmarkScorer', 'BenchmarkRunner'],
   'game.js': ['Game', 'game']
@@ -55,6 +57,7 @@ const GLOBAL_EXPORTS = [
   'Economy',
   'RaidSystem',
   'DiplomacySystem',
+  'ExplorationSystem',
   'BaselineAgent',
   'BenchmarkScorer',
   'BenchmarkRunner',

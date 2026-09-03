@@ -73,6 +73,10 @@ class Villager {
     this.wanderTimer = 0;
     this.wanderInterval = 3000; // ms between wandering decisions
 
+    // Cross-map scouting (wilderness only; never rival village cores)
+    this.isScouting = data.isScouting || false;
+    this.scoutMission = data.scoutMission || null;
+
     // Interaction log
     this.interactionLog = [];
 
@@ -281,6 +285,12 @@ class Villager {
 
     const criticalHunger = this.hunger < 25;
     const criticalThirst = this.thirst < 25;
+
+    // Keep scouts on mission unless they are starving or collapsing
+    if (this.isScouting && !criticalHunger && !criticalThirst && this.energy >= 20) {
+      this.status = CONSTANTS.ACTIVITY.SCOUTING;
+      return;
+    }
     const busyWorkStatuses = [
       CONSTANTS.ACTIVITY.WORKING,
       CONSTANTS.ACTIVITY.GATHERING,
@@ -289,7 +299,8 @@ class Villager {
       CONSTANTS.ACTIVITY.HUNTING,
       CONSTANTS.ACTIVITY.FISHING,
       CONSTANTS.ACTIVITY.SOCIALIZING,
-      CONSTANTS.ACTIVITY.RITUAL
+      CONSTANTS.ACTIVITY.RITUAL,
+      CONSTANTS.ACTIVITY.SCOUTING
     ];
     const midDurationWork = this.activityDuration > 0 && busyWorkStatuses.includes(this.status);
 
@@ -346,6 +357,8 @@ class Villager {
     const lonely = this.socialNeed < lonelyThreshold ||
       (this.socialNeed < seekThreshold && sociable > 50);
 
+    if (this.isScouting) return;
+
     if (lonely) {
       // Stay in an in-progress meetup instead of repathing every tick (the social loop)
       if (this.status === CONSTANTS.ACTIVITY.SOCIALIZING) {
@@ -376,7 +389,7 @@ class Villager {
 
     // Natural wandering behavior when idle or after reaching destination
     if (!this.isMoving) {
-      if (this.isNeedLockedActivity()) return;
+      if (this.isScouting || this.isNeedLockedActivity()) return;
       this.wanderTimer += deltaTime;
       if (this.wanderTimer >= this.wanderInterval) {
         this.wanderTimer = 0;
@@ -439,18 +452,33 @@ class Villager {
   }
 
   startWandering(world) {
+    if (this.isScouting) return;
+
     const village = game?.getVillage?.(this.villageId);
     const anchor = village?.center || { x: Math.round(this.x), y: Math.round(this.y) };
-    const territoryRadius = village?.territoryRadius || 8;
+    const territoryRadius = village?.territoryRadius || CONSTANTS.VILLAGE.DEFAULT_RADIUS;
+    const curious = (this.personality?.curious || 0) >= (CONSTANTS.EXPLORATION?.CURIOUS_THRESHOLD || 55);
+    const exploreWilderness = curious &&
+      this.energy > 40 &&
+      Math.random() < (CONSTANTS.EXPLORATION?.WILDERNESS_WANDER_CHANCE || 0.28);
 
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const radius = 2 + Math.floor(Math.random() * Math.min(4, territoryRadius - 2));
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const extraRange = CONSTANTS.EXPLORATION?.WILDERNESS_WANDER_RANGE || 10;
+      const maxRadius = exploreWilderness ? territoryRadius + extraRange : Math.max(3, territoryRadius - 1);
+      const minRadius = exploreWilderness ? Math.max(3, territoryRadius - 1) : 2;
+      const radius = minRadius + Math.random() * Math.max(1, maxRadius - minRadius);
       const angle = Math.random() * Math.PI * 2;
       const tx = Math.round(anchor.x + Math.cos(angle) * radius);
       const ty = Math.round(anchor.y + Math.sin(angle) * radius);
       const tile = world.getWalkableTileNear(tx, ty, 2);
-      if (tile && village && !village.isInTerritory(tile.x, tile.y)) continue;
-      if (tile && this.moveTo(tile.x, tile.y, world)) {
+      if (!tile) continue;
+      if (!exploreWilderness && village && !village.isInTerritory(tile.x, tile.y)) continue;
+      if (game?.canVillagerEnterTerritory && !game.canVillagerEnterTerritory(this, tile.x, tile.y)) continue;
+      if (this.moveTo(tile.x, tile.y, world)) {
+        if (exploreWilderness && village && !village.isInTerritory(tile.x, tile.y)) {
+          this.activity = 'Exploring the wilds';
+          this.showSpeechBubble('🔭', 'Exploring', 3000);
+        }
         return;
       }
     }
@@ -483,13 +511,15 @@ class Villager {
   }
 
   isNeedLockedActivity(status = this.status) {
+    if (this.isScouting) return true;
     return [
       CONSTANTS.ACTIVITY.EATING,
       CONSTANTS.ACTIVITY.DRINKING,
       CONSTANTS.ACTIVITY.SLEEPING,
       CONSTANTS.ACTIVITY.RESTING,
       CONSTANTS.ACTIVITY.SOCIALIZING,
-      CONSTANTS.ACTIVITY.RITUAL
+      CONSTANTS.ACTIVITY.RITUAL,
+      CONSTANTS.ACTIVITY.SCOUTING
     ].includes(status);
   }
 
@@ -731,7 +761,8 @@ class Villager {
       eating: 'Eating',
       drinking: 'Drinking',
       resting: 'Resting',
-      ritual: 'Participating in ritual'
+      ritual: 'Participating in ritual',
+      scouting: 'Scouting the wilds'
     };
 
     this.activity = activityDescriptions[action.action] || action.action;
@@ -811,7 +842,9 @@ class Villager {
       interactionLog: this.interactionLog,
       skinTone: this.skinTone,
       hairColor: this.hairColor,
-      spriteVariant: this.spriteVariant
+      spriteVariant: this.spriteVariant,
+      isScouting: this.isScouting,
+      scoutMission: this.scoutMission
     };
   }
 

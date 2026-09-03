@@ -82,7 +82,8 @@ const CONSTANTS = {
     FISHING: 'fishing',
     FARMING: 'farming',
     RESTING: 'resting',
-    RITUAL: 'ritual'
+    RITUAL: 'ritual',
+    SCOUTING: 'scouting'
   },
 
   // Time
@@ -514,6 +515,17 @@ const CONSTANTS = {
     HOSTILE_WAR_THRESHOLD_DAYS: 3 // Days of hostile relations before war triggers
   },
 
+  // Wilderness scouting and first contact (beyond claimed tribal lands)
+  EXPLORATION: {
+    SIGHT_RANGE: 8,
+    WILDERNESS_WANDER_RANGE: 10,
+    WILDERNESS_WANDER_CHANCE: 0.28,
+    CURIOUS_THRESHOLD: 55,
+    CONTACT_RELATION_BUMP: 8,
+    RUMOR_CONTACT_DAYS: 5,
+    EXPLORED_TILE_RADIUS: 2
+  },
+
   // Village identity
   VILLAGE: {
     DEFAULT_RADIUS: 12,
@@ -568,4 +580,5 @@ Object.freeze(CONSTANTS.INTERACTION);
 Object.freeze(CONSTANTS.VILLAGE_RELATION);
 Object.freeze(CONSTANTS.WAR);
 Object.freeze(CONSTANTS.DIPLOMACY);
+Object.freeze(CONSTANTS.EXPLORATION);
 Object.freeze(CONSTANTS.VILLAGE);

@@ -144,6 +144,14 @@ class DiplomacySystem {
           );
           break;
         }
+        case 'observe':
+          this.game.explorationSystem?.dispatchScout(sourceVillage, targetVillage, 'observe');
+          this.game.addChronicleEntry(
+            `${sourceVillage.name} sends scouts toward ${targetVillage.name}.`,
+            'normal',
+            sourceVillage.id
+          );
+          break;
         case 'raid':
           // Raid is started immediately when queued; nothing further here
           break;

@@ -48,6 +48,7 @@ function loadScript(relPath, sandbox) {
 ;if (typeof Economy !== 'undefined') globalThis.Economy = Economy;
 ;if (typeof RaidSystem !== 'undefined') globalThis.RaidSystem = RaidSystem;
 ;if (typeof DiplomacySystem !== 'undefined') globalThis.DiplomacySystem = DiplomacySystem;
+;if (typeof ExplorationSystem !== 'undefined') globalThis.ExplorationSystem = ExplorationSystem;
 ;if (typeof BaselineAgent !== 'undefined') globalThis.BaselineAgent = BaselineAgent;
 ;if (typeof BenchmarkScorer !== 'undefined') globalThis.BenchmarkScorer = BenchmarkScorer;
 ;if (typeof BenchmarkRunner !== 'undefined') globalThis.BenchmarkRunner = BenchmarkRunner;
@@ -56,6 +57,7 @@ function loadScript(relPath, sandbox) {
   if (exported.Economy) globalThis.Economy = exported.Economy;
   if (exported.RaidSystem) globalThis.RaidSystem = exported.RaidSystem;
   if (exported.DiplomacySystem) globalThis.DiplomacySystem = exported.DiplomacySystem;
+  if (exported.ExplorationSystem) globalThis.ExplorationSystem = exported.ExplorationSystem;
   if (exported.BaselineAgent) globalThis.BaselineAgent = exported.BaselineAgent;
   if (exported.BenchmarkScorer) globalThis.BenchmarkScorer = exported.BenchmarkScorer;
   if (exported.BenchmarkRunner) globalThis.BenchmarkRunner = exported.BenchmarkRunner;
@@ -69,10 +71,11 @@ loadScript('src/renderer/js/constants.js', sandbox);
 loadScript('src/renderer/js/systems/economy.js', sandbox);
 loadScript('src/renderer/js/systems/raid.js', sandbox);
 loadScript('src/renderer/js/systems/diplomacy.js', sandbox);
+loadScript('src/renderer/js/systems/exploration.js', sandbox);
 loadScript('src/renderer/js/systems/baseline-agent.js', sandbox);
 loadScript('src/renderer/js/systems/benchmark.js', sandbox);
 
-const { Utils, CONSTANTS, Economy, RaidSystem, DiplomacySystem, BaselineAgent, BenchmarkScorer } = sandbox;
+const { Utils, CONSTANTS, Economy, RaidSystem, DiplomacySystem, ExplorationSystem, BaselineAgent, BenchmarkScorer } = sandbox;
 
 let passed = 0;
 let failed = 0;
@@ -113,10 +116,23 @@ function makeVillage(id, resources = {}) {
     relations: {},
     atWarWith: [],
     raidCooldown: 0,
+    knownVillages: [],
+    lastScoutDay: 0,
+    scoutAttempts: 0,
     isInTerritory(x, y) {
       const dx = x - this.center.x;
       const dy = y - this.center.y;
       return Math.sqrt(dx * dx + dy * dy) <= this.territoryRadius;
+    },
+    knowsVillage(villageId) {
+      return (this.knownVillages || []).includes(villageId);
+    },
+    markVillageKnown(villageId) {
+      if (!villageId || villageId === this.id) return false;
+      this.knownVillages = this.knownVillages || [];
+      if (this.knownVillages.includes(villageId)) return false;
+      this.knownVillages.push(villageId);
+      return true;
     },
     calculateStrength() {
       return this.villagerIds.length * 10;
@@ -132,7 +148,7 @@ function makeGame(villages) {
     world: { structures: [] },
     selectedVillager: null,
     hudVillageId: null,
-    timeState: { day: 1, dayDuration: 600000 },
+    timeState: { day: 1, hours: 10, dayDuration: 600000 },
     diplomaticEvents: [],
     hostileDaysCount: {},
     activeRaid: null,
@@ -140,8 +156,14 @@ function makeGame(villages) {
     getVillage(id) {
       return this.villages.find((v) => v.id === id);
     },
+    getRivalVillage(id) {
+      return this.villages.find((v) => v.id !== id) || null;
+    },
     getVillagersForVillage(villageId) {
       return this.villagers.filter((v) => v.villageId === villageId);
+    },
+    canVillagerEnterTerritory() {
+      return true;
     },
     addChronicleEntry(text) {
       this.chronicle.push(text);
@@ -159,7 +181,35 @@ function makeGame(villages) {
   game.economy = new Economy(game);
   game.raidSystem = new RaidSystem(game);
   game.diplomacySystem = new DiplomacySystem(game);
+  game.explorationSystem = new ExplorationSystem(game);
   return game;
+}
+
+function makeScoutVillager(id, villageId, extras = {}) {
+  return {
+    id,
+    name: `Scout-${id}`,
+    villageId,
+    x: 10,
+    y: 10,
+    health: 100,
+    energy: 80,
+    hunger: 80,
+    thirst: 80,
+    isChieftan: false,
+    isScouting: false,
+    isMoving: false,
+    status: 'idle',
+    activity: 'Idle',
+    lifeStage: CONSTANTS.LIFE_STAGE.ADULT,
+    personality: { curious: 80 },
+    moveTo() {
+      this.isMoving = true;
+      return true;
+    },
+    showSpeechBubble() {},
+    ...extras
+  };
 }
 
 console.log('\nEconomy');
@@ -407,6 +457,153 @@ test('evaluateWarEscalation increments unique pair once', () => {
   game.diplomacySystem.evaluateWarEscalation();
   const key = ['a', 'b'].sort().join('_');
   assert.strictEqual(game.hostileDaysCount[key], 1);
+});
+
+test('processChieftanDecisions observe dispatches a scout', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  b.center = { x: 40, y: 10 };
+  const game = makeGame([a, b]);
+  game.world.getWalkableTileNear = (x, y) => ({ x, y });
+  game.villagers = [makeScoutVillager('s1', 'a')];
+  a.villagerIds = ['s1'];
+  game.timeState.day = 3;
+  game.diplomaticEvents = [
+    {
+      type: 'observe',
+      sourceVillageId: 'a',
+      targetVillageId: 'b',
+      createdDay: 2,
+      urgency: 'medium'
+    }
+  ];
+  game.diplomacySystem.processChieftanDecisions();
+  assert.strictEqual(game.villagers[0].isScouting, true);
+  assert.strictEqual(game.diplomaticEvents.length, 0);
+});
+
+console.log('\nExplorationSystem');
+test('hasDiscovered is false until both tribes are marked', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  const game = makeGame([a, b]);
+  assert.strictEqual(game.explorationSystem.hasDiscovered(a, b), false);
+  a.markVillageKnown('b');
+  assert.strictEqual(game.explorationSystem.hasDiscovered(a, b), false);
+  b.markVillageKnown('a');
+  assert.strictEqual(game.explorationSystem.hasDiscovered(a, b), true);
+});
+
+test('recordFirstContact is idempotent and bumps relations', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  a.relations.b = -15;
+  b.relations.a = -15;
+  const game = makeGame([a, b]);
+  assert.strictEqual(game.explorationSystem.recordFirstContact(a, b, null, 'sighting'), true);
+  assert.strictEqual(game.explorationSystem.recordFirstContact(a, b, null, 'sighting'), false);
+  assert.ok(a.knowsVillage('b'));
+  assert.ok(b.knowsVillage('a'));
+  assert.ok(a.relations.b > -15);
+  assert.ok(game.chronicle.length >= 2);
+});
+
+test('pickScout prefers curious adults and skips chieftans', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  const game = makeGame([a, b]);
+  game.villagers = [
+    makeScoutVillager('chief', 'a', { isChieftan: true, personality: { curious: 99 } }),
+    makeScoutVillager('lazy', 'a', { personality: { curious: 20 } }),
+    makeScoutVillager('curious', 'a', { personality: { curious: 90 } })
+  ];
+  a.villagerIds = ['chief', 'lazy', 'curious'];
+  assert.strictEqual(game.explorationSystem.pickScout(a).id, 'curious');
+});
+
+test('canSeeRivalTerritory uses sight range beyond claimed land', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  b.center = { x: 40, y: 10 };
+  const game = makeGame([a, b]);
+  const villager = makeScoutVillager('s1', 'a', { x: 10, y: 10 });
+  assert.strictEqual(game.explorationSystem.canSeeRivalTerritory(villager, b), false);
+  villager.x = 22;
+  assert.strictEqual(game.explorationSystem.canSeeRivalTerritory(villager, b), true);
+});
+
+test('detectContacts records a meeting when rivals are in sight', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  b.center = { x: 50, y: 50 };
+  const game = makeGame([a, b]);
+  game.villagers = [
+    makeScoutVillager('s1', 'a', { x: 20, y: 20 }),
+    makeScoutVillager('s2', 'b', { x: 22, y: 20 })
+  ];
+  game.explorationSystem.detectContacts();
+  assert.strictEqual(game.explorationSystem.hasDiscovered(a, b), true);
+});
+
+test('clearScout and sendScoutHome end or return a mission', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  const game = makeGame([a, b]);
+  const scout = makeScoutVillager('s1', 'a', { isScouting: true, status: CONSTANTS.ACTIVITY.SCOUTING });
+  game.villagers = [scout];
+  a.villagerIds = ['s1'];
+  game.explorationSystem.sendScoutHome(scout);
+  assert.strictEqual(scout.scoutMission.phase, 'returning');
+  game.explorationSystem.clearScout(scout);
+  assert.strictEqual(scout.isScouting, false);
+  assert.strictEqual(game.explorationSystem.getActiveScout(a), null);
+});
+
+test('isDaytime is false at night', () => {
+  const game = makeGame([makeVillage('a')]);
+  game.timeState.hours = 22;
+  assert.strictEqual(game.explorationSystem.isDaytime(), false);
+  game.timeState.hours = 10;
+  assert.strictEqual(game.explorationSystem.isDaytime(), true);
+});
+
+test('maybeRumorContact unlocks discovery after the rumor day', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  const game = makeGame([a, b]);
+  game.timeState.day = CONSTANTS.EXPLORATION.RUMOR_CONTACT_DAYS;
+  game.explorationSystem.maybeRumorContact();
+  assert.strictEqual(game.explorationSystem.hasDiscovered(a, b), true);
+});
+
+test('dispatchScout marks a villager as scouting', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  b.center = { x: 40, y: 10 };
+  const game = makeGame([a, b]);
+  game.world.getWalkableTileNear = (x, y) => ({ x, y });
+  game.villagers = [makeScoutVillager('s1', 'a')];
+  a.villagerIds = ['s1'];
+  const scout = game.explorationSystem.dispatchScout(a, b, 'explore');
+  assert.ok(scout);
+  assert.strictEqual(scout.isScouting, true);
+  assert.strictEqual(a.scoutAttempts, 1);
+});
+
+test('process dispatches scouts for undiscovered rivals', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  b.center = { x: 40, y: 10 };
+  const game = makeGame([a, b]);
+  game.world.getWalkableTileNear = (x, y) => ({ x, y });
+  game.villagers = [
+    makeScoutVillager('s1', 'a'),
+    makeScoutVillager('s2', 'b', { x: 40, y: 10 })
+  ];
+  a.villagerIds = ['s1'];
+  b.villagerIds = ['s2'];
+  game.explorationSystem.process();
+  assert.ok(game.villagers.some((v) => v.isScouting));
 });
 
 console.log('\nUtils seeded RNG');

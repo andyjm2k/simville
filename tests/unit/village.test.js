@@ -47,7 +47,8 @@ describe('Village', () => {
       name: 'Stormmere',
       center: { x: 12, y: 18 },
       villagerIds: ['a', 'b'],
-      relations: { other: -15 }
+      relations: { other: -15 },
+      knownVillages: ['other']
     });
 
     const restored = Village.deserialize(original.serialize());
@@ -56,6 +57,7 @@ describe('Village', () => {
     expect(restored.center).toEqual(original.center);
     expect(restored.villagerIds).toEqual(original.villagerIds);
     expect(restored.relations).toEqual(original.relations);
+    expect(restored.knownVillages).toEqual(['other']);
   });
 
   it('stores distinct chronicle and tech state per village', () => {
@@ -86,6 +88,15 @@ describe('Village', () => {
     const first = new Village({ displayIndex: 0 });
     const second = new Village({ displayIndex: 1 });
     expect(first.getColor()).not.toBe(second.getColor());
+  });
+
+  it('records first awareness of another village once', () => {
+    const village = new Village({ id: 'home' });
+    expect(village.knowsVillage('rival')).toBe(false);
+    expect(village.markVillageKnown('rival')).toBe(true);
+    expect(village.knowsVillage('rival')).toBe(true);
+    expect(village.markVillageKnown('rival')).toBe(false);
+    expect(village.markVillageKnown('home')).toBe(false);
   });
 
   it('filters villagers by villagerIds membership', () => {

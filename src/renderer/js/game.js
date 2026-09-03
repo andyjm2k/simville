@@ -68,6 +68,7 @@ class Game {
     this.economy = null;
     this.raidSystem = null;
     this.diplomacySystem = null;
+    this.explorationSystem = null;
     this.hudVillageId = null;
 
     // Benchmark mode (headless LLM vs opponent)
@@ -135,7 +136,9 @@ class Game {
     }
 
     const candidates = this.villagers.filter(other =>
-      other.health > 0 && this.canVillagersSocialize(villager, other)
+      other.health > 0 &&
+      !other.isScouting &&
+      this.canVillagersSocialize(villager, other)
     );
     if (!candidates.length) return null;
 
@@ -236,6 +239,7 @@ class Game {
   }
 
   applySocialVillagerAction(villager, action) {
+    if (villager?.isScouting) return null;
     const wantsSocial = action?.action === CONSTANTS.ACTIVITY.SOCIALIZING || !!action?.interactionTarget;
     if (!wantsSocial) return null;
 
@@ -518,11 +522,34 @@ class Game {
     // Check raid cooldown
     if (village.raidCooldown > 0) return;
 
-    // Generate diplomatic action via LLM
     const context = {
       yourStrength: village.calculateStrength(this.villagers),
-      theirStrength: otherVillage.calculateStrength(this.villagers)
+      theirStrength: otherVillage.calculateStrength(this.villagers),
+      rivalDiscovered: this.explorationSystem?.hasDiscovered(village, otherVillage) || false
     };
+
+    if (!context.rivalDiscovered) {
+      this.explorationSystem?.dispatchScout(village, otherVillage, 'chieftan_order');
+      this.diplomaticEvents.push({
+        type: 'observe',
+        sourceVillageId: villageId,
+        targetVillageId: otherVillage.id,
+        reason: 'Scouts must find the other tribe before diplomacy can begin.',
+        urgency: 'low',
+        age: 0,
+        createdDay: this.timeState.day,
+        chieftanName: chieftan.name
+      });
+      if (this.benchmarkMode) {
+        this.recordBenchmarkEvent('diplomacy', {
+          villageId,
+          slot: this.benchmarkAgentMeta[villageId]?.slot,
+          action: 'observe',
+          reason: 'undiscovered rival'
+        });
+      }
+      return;
+    }
 
     const agent = this.benchmarkMode ? this.getBenchmarkAgent(villageId) : null;
     let decision;
@@ -997,6 +1024,14 @@ class Game {
     return false;
   }
 
+  // Economy / raid / exploration systems once villages exist
+  ensureVillageSystems() {
+    this.economy = new Economy(this);
+    this.raidSystem = new RaidSystem(this);
+    this.diplomacySystem = new DiplomacySystem(this);
+    this.explorationSystem = new ExplorationSystem(this);
+  }
+
   newWorld() {
     console.log('newWorld: Starting');
     // Generate new world (creates 2 village centers)
@@ -1012,10 +1047,7 @@ class Game {
     this.createVillages(2);
     this.ensureVillageResourceAccess();
 
-    // Economy / raid systems once villages exist
-    this.economy = new Economy(this);
-    this.raidSystem = new RaidSystem(this);
-    this.diplomacySystem = new DiplomacySystem(this);
+    this.ensureVillageSystems();
     this.hudVillageId = this.villages[0]?.id || null;
     this.nextChieftanDecision = {};
     this.hostileDaysCount = {};
@@ -1469,6 +1501,8 @@ class Game {
 
     // Process active raid
     this.processRaid(scaledDelta);
+
+    this.explorationSystem?.process();
 
     // Process chieftan diplomatic decisions
     this.processChieftanDecisions();
@@ -2530,9 +2564,7 @@ class Game {
     this.nextChieftanDecision = {};
 
     this.createVillages(2);
-    this.economy = new Economy(this);
-    this.raidSystem = new RaidSystem(this);
-    this.diplomacySystem = new DiplomacySystem(this);
+    this.ensureVillageSystems();
 
     this.createInitialVillagers();
     this.assignVillagersToVillages();
@@ -2568,15 +2600,17 @@ class Game {
 
   buildWorldStateForVillage(village, rival = null) {
     const structureIds = new Set(village.structureIds || []);
+    const discovered = rival ? (this.explorationSystem?.hasDiscovered(village, rival) || false) : false;
     const rivalInfo = rival ? {
       id: rival.id,
       name: rival.name,
-      center: { ...rival.center },
-      population: this.getVillagersForVillage(rival.id).length,
-      resources: this.getResources(rival.id),
+      discovered,
+      center: discovered ? { ...rival.center } : null,
+      population: discovered ? this.getVillagersForVillage(rival.id).length : null,
+      resources: discovered ? this.getResources(rival.id) : null,
       relation: village.relations?.[rival.id] || 0,
       atWar: village.atWarWith?.includes(rival.id) || false,
-      strength: Math.round(rival.calculateStrength(this.villagers) * 10) / 10
+      strength: discovered ? Math.round(rival.calculateStrength(this.villagers) * 10) / 10 : null
     } : null;
 
     return {
@@ -2612,6 +2646,7 @@ class Game {
       if (!villager) continue;
 
       const hasCriticalNeeds = villager.hunger < 30 || (villager.thirst ?? 100) < 30 || villager.energy < 15;
+      if (villager.isScouting && !hasCriticalNeeds) continue;
       const isSurvivalAction = action.action === CONSTANTS.ACTIVITY.EATING ||
         action.action === CONSTANTS.ACTIVITY.DRINKING ||
         action.action === CONSTANTS.ACTIVITY.GATHERING ||
@@ -2728,6 +2763,7 @@ class Game {
     this.processEventQueue();
     this.processDiplomaticEvents();
     this.processRaid(scaledDelta);
+    this.explorationSystem?.process();
     this.processChieftanDecisions();
     this.checkDeaths();
 
@@ -2865,9 +2901,10 @@ class Game {
         const action = this.sanitizeVillagerAction(rawAction);
         const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
         if (villager) {
+          const hasCriticalNeeds = villager.hunger < 30 || (villager.thirst ?? 100) < 30 || villager.energy < 15;
+          if (villager.isScouting && !hasCriticalNeeds) continue;
           // Critical needs override: if villager is starving/dehydrated/exhausted,
           // skip non-survival actions to let them recover
-          const hasCriticalNeeds = villager.hunger < 30 || (villager.thirst ?? 100) < 30 || villager.energy < 15;
           const isSurvivalAction = action.action === CONSTANTS.ACTIVITY.EATING ||
             action.action === CONSTANTS.ACTIVITY.DRINKING ||
             action.action === CONSTANTS.ACTIVITY.GATHERING ||
@@ -3080,7 +3117,8 @@ class Game {
         v.status !== CONSTANTS.ACTIVITY.EATING &&
         v.status !== CONSTANTS.ACTIVITY.SLEEPING &&
         v.status !== CONSTANTS.ACTIVITY.RESTING &&
-        v.status !== CONSTANTS.ACTIVITY.SOCIALIZING
+        v.status !== CONSTANTS.ACTIVITY.SOCIALIZING &&
+        !v.isScouting
       )
       .sort((a, b) => {
         const aSkill = Math.max(a.skills.gathering || 0, a.skills.hunting || 0, a.skills.fishing || 0);
@@ -4761,9 +4799,7 @@ Respond with JSON: {
       }
 
       // Instantiate systems after villages restored
-      this.economy = new Economy(this);
-      this.raidSystem = new RaidSystem(this);
-      this.diplomacySystem = new DiplomacySystem(this);
+      this.ensureVillageSystems();
 
       // Migrate legacy Game.resources orphan pool if present
       if (saveData.resources) {

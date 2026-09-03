@@ -519,16 +519,20 @@ Respond with valid JSON only: {"chronicle":"Your 2-3 sentence chronicle text her
     const territoryRadius = worldState.territoryRadius || 12;
     const villageName = worldState.villageName || 'your tribe';
     const rival = worldState.rivalVillage;
-    const rivalBlock = rival ? `
-RIVAL VILLAGE (competitive opponent — outplay them):
+    const exploreRange = territoryRadius + (CONSTANTS.EXPLORATION?.WILDERNESS_WANDER_RANGE || 10);
+    const rivalBlock = !rival ? '' : rival.discovered ? `
+RIVAL TRIBE (discovered — do not live in their village):
 - Name: ${rival.name}
-- Center: (${rival.center?.x ?? '?'}, ${rival.center?.y ?? '?'}) — DO NOT enter their territory unless at war
+- Center: (${rival.center?.x ?? '?'}, ${rival.center?.y ?? '?'})
 - Population: ${rival.population}
 - Relation score: ${rival.relation} (-100=war, 0=neutral, +100=allied)
 - At war: ${rival.atWar ? 'YES' : 'no'}
 - Their strength: ${rival.strength}
 - Their resources: ${JSON.stringify(rival.resources)}
-Prioritize actions that strengthen YOUR village vs this rival (food security, builds, coordinated work).` : '';
+Curious villagers MAY scout unclaimed wilderness toward them. NEVER enter their claimed territory unless at war or allied.` : `
+ANOTHER TRIBE is rumored to live somewhere on this continent. You have not made contact yet.
+Curious, high-energy villagers SHOULD explore unclaimed wilderness (beyond your ${territoryRadius}-tile home lands, up to ~${exploreRange} tiles from your center) so the tribes can discover each other.
+Do not settle or socialize at an unknown village if you find one — report back.`;
 
     const prompt = `Generate actions for each villager in this tribal village simulation.
 
@@ -540,7 +544,8 @@ POPULATION: ${villagers.length} villagers (all belong to ${villageName})
 STRUCTURES: ${structureContext}
 WORLD SIZE: 64x64 tiles
 YOUR VILLAGE CENTER: (${center.x}, ${center.y})
-YOUR TERRITORY RADIUS: ${territoryRadius} tiles from center — stay within this area
+YOUR HOME TERRITORY: ${territoryRadius} tiles (daily work, gathering, and social life stay here)
+EXPLORATION RANGE: curious villagers may travel up to ~${exploreRange} tiles from center through UNCLAIMED land
 ${rivalBlock}
 
 VILLAGERS (with current positions):
@@ -550,8 +555,8 @@ Based on each villager's needs, personality, and the time of day, decide what th
 
 Output JSON with an "actions" array. Each action has:
 - villagerId: string (the villager's id)
-- action: idle|working|gathering|building|farming|hunting|fishing|socializing|sleeping|eating|drinking|resting|ritual
-- moveTo: {x: number, y: number} - tile coordinates within YOUR territory (${center.x}±${territoryRadius}, ${center.y}±${territoryRadius})
+- action: idle|working|gathering|building|farming|hunting|fishing|socializing|sleeping|eating|drinking|resting|ritual|scouting
+- moveTo: {x: number, y: number} - home-territory tiles for work/social life; wilderness tiles allowed for scouting (${center.x}±${exploreRange}, ${center.y}±${exploreRange})
 - target: optional villager name or resource type
 - duration: 1-10 (minutes in game time)
 - speechEmoji: emoji from this list 💬😂😢😠😍🤝😮🤔🍖😴💪🎣🏠👶🙏🎉
@@ -560,13 +565,14 @@ Output JSON with an "actions" array. Each action has:
 - interactionType: talk|argue|share|help|romance|gossip if applicable
 
 Rules:
-- TRIBAL BOUNDARIES: All villagers belong to ${villageName}. Keep moveTo coordinates within your territory radius of (${center.x}, ${center.y}). Never path toward a rival village center unless at war.
+- TRIBAL BOUNDARIES: Daily life stays in ${villageName}'s home lands around (${center.x}, ${center.y}). Curious villagers may scout unclaimed wilderness. Never path into a rival village center unless at war or allied.
+- EXPLORATION: Assign at least one healthy curious villager to scouting/moveTo in unclaimed land between tribes when the other tribe is undiscovered.
 - SOCIAL BONDS: Only socialize with villagers from your own tribe listed above. Rival tribes are separate communities.
 - CRITICAL SURVIVAL PRIORITY: If ANY villager has hunger < 40, thirst < 40, or energy < 30, they MUST be assigned eating, drinking, gathering, hunting, fishing, or resting. NEVER assign idle, working, socializing, or building to a villager with critical needs.
 - Movement should be purposeful - if action is gathering, move towards resources within your territory
 - If socializing, move towards another villager from your tribe
 - If sleeping/eating/drinking, move towards a hut, fire, well, or water source in your village
-- Active villagers should be working or gathering within tribal lands
+- Active villagers should be working or gathering within tribal lands unless they are scouting
 - Social villagers should seek out others from their own tribe
 - Move coordinates should be integers between 0-63
 - Villagers with hunger < 30 or thirst < 30 should always be assigned survival actions first`;
@@ -696,31 +702,35 @@ Output JSON with:
 
   // Generate diplomatic action for chieftan regarding other village
   async generateDiplomaticAction(village, otherVillage, context) {
+    const discovered = context?.rivalDiscovered !== false;
     const prompt = `As chieftan of "${village.name}", consider your relations with the rival village "${otherVillage.name}".
 
 CURRENT RELATIONS:
 - Your village: ${village.name} with ${village.villagerIds?.length || 0} villagers
 - Their village: ${otherVillage.name} with ${otherVillage.villagerIds?.length || 0} villagers
+- First contact made: ${discovered ? 'Yes' : 'No — you only have rumors'}
 - Current relation score: ${village.relations?.[otherVillage.id] || 0} (-100 to 100, negative is hostile)
 - At war: ${village.atWarWith?.includes(otherVillage.id) ? 'Yes' : 'No'}
 
 RESOURCES:
 - Your village: ${JSON.stringify(village.resources)}
-- Their village: ${JSON.stringify(otherVillage.resources)}
+- Their village: ${discovered ? JSON.stringify(otherVillage.resources) : 'unknown'}
 
 VILLAGE STRENGTHS:
 - Your strength: ${context?.yourStrength || 0}
-- Their strength: ${context?.theirStrength || 0}
+- Their strength: ${discovered ? (context?.theirStrength || 0) : 'unknown'}
 
 Your people are watching your leadership. What action will you take regarding the rival village?
 
 Choose ONE action:
-1. "propose_trade" - Offer to exchange resources peacefully
-2. "propose_alliance" - Suggest working together
-3. "send_threat" - Warn them to stay away from your territory
-4. "raid" - Launch a raid against their village
+1. "propose_trade" - Offer to exchange resources peacefully (only after first contact)
+2. "propose_alliance" - Suggest working together (only after first contact)
+3. "send_threat" - Warn them to stay away from your territory (only after first contact)
+4. "raid" - Launch a raid against their village (only after first contact)
 5. "ignore" - Focus on your own village for now
 6. "observe" - Send scouts to learn more about them
+
+${discovered ? 'You may choose any action.' : 'You have not made contact. Choose "observe" or "ignore" only.'}
 
 Output JSON with:
 - action: the chosen action
@@ -732,6 +742,15 @@ Output JSON with:
 
     if (result && result.action) {
       return result;
+    }
+
+    if (context?.rivalDiscovered === false) {
+      return {
+        action: 'observe',
+        targetVillage: otherVillage.name,
+        reason: 'Scouts must find the other people first.',
+        urgency: 'low'
+      };
     }
 
     // Default fallback - ignore if relations are neutral

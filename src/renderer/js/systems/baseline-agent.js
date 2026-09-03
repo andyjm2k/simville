@@ -181,7 +181,14 @@ class BaselineAgent {
     const atWar = village.atWarWith?.includes(otherVillage.id);
 
     let decision;
-    if (atWar && strengthRatio > 1.15 && (village.raidCooldown || 0) <= 0) {
+    if (context?.rivalDiscovered === false) {
+      decision = {
+        action: 'observe',
+        targetVillage: otherVillage.name,
+        reason: 'We have not found their people yet; send scouts.',
+        urgency: 'medium'
+      };
+    } else if (atWar && strengthRatio > 1.15 && (village.raidCooldown || 0) <= 0) {
       decision = {
         action: 'raid',
         targetVillage: otherVillage.name,
