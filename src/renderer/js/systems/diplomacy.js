@@ -22,6 +22,9 @@ class DiplomacySystem {
     const v2 = this.game.getVillage(villageId2);
     if (!v1 || !v2) return;
 
+    // Conquest track supersedes trade — close peaceful open borders
+    this.game.revokeTradeAccess?.(v1, v2);
+
     if (!v1.atWarWith.includes(villageId2)) {
       v1.atWarWith.push(villageId2);
     }
@@ -113,8 +116,10 @@ class DiplomacySystem {
             100,
             (targetVillage.relations[sourceVillage.id] || 0) + 15
           );
+          // Trade track: formal agreement opens mutual borders
+          this.game.establishTradeAccess?.(sourceVillage, targetVillage);
           this.game.addChronicleEntry(
-            `${sourceVillage.name} and ${targetVillage.name} have established a trade agreement.`
+            `${sourceVillage.name} and ${targetVillage.name} have established a trade agreement. Borders open for peaceful travel.`
           );
           break;
         }
@@ -125,8 +130,10 @@ class DiplomacySystem {
             100,
             (targetVillage.relations[sourceVillage.id] || 0) + 40
           );
+          // Alliance is also on the trade track for open borders
+          this.game.establishTradeAccess?.(sourceVillage, targetVillage);
           this.game.addChronicleEntry(
-            `${sourceVillage.name} and ${targetVillage.name} have formed an alliance!`
+            `${sourceVillage.name} and ${targetVillage.name} have formed an alliance! Borders are open.`
           );
           break;
         }
@@ -139,11 +146,21 @@ class DiplomacySystem {
             -100,
             (targetVillage.relations[sourceVillage.id] || 0) - 20
           );
+          // Threats close the peaceful trade track
+          this.game.revokeTradeAccess?.(sourceVillage, targetVillage);
           this.game.addChronicleEntry(
             `${sourceVillage.name} sends threats toward ${targetVillage.name}! Relations worsen.`
           );
           break;
         }
+        case 'observe':
+          this.game.explorationSystem?.dispatchScout(sourceVillage, targetVillage, 'observe');
+          this.game.addChronicleEntry(
+            `${sourceVillage.name} sends scouts toward ${targetVillage.name}.`,
+            'normal',
+            sourceVillage.id
+          );
+          break;
         case 'raid':
           // Raid is started immediately when queued; nothing further here
           break;

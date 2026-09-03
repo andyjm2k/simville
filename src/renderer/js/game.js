@@ -68,6 +68,7 @@ class Game {
     this.economy = null;
     this.raidSystem = null;
     this.diplomacySystem = null;
+    this.explorationSystem = null;
     this.hudVillageId = null;
 
     // Benchmark mode (headless LLM vs opponent)
@@ -94,15 +95,42 @@ class Game {
     return null;
   }
 
+  /**
+   * Why a home village may enter another tribe's claimed land.
+   * Only two tracks open foreign territory: conquest (war) or trade (agreement/alliance/friendly).
+   * First contact / discovery alone never opens borders.
+   * @returns {'war'|'trade'|null}
+   */
+  getForeignTerritoryAccess(homeVillage, ownerVillage) {
+    if (!homeVillage || !ownerVillage || homeVillage.id === ownerVillage.id) return null;
+
+    // Conquest track — wartime entry for raids and conflict
+    if (homeVillage.atWarWith?.includes(ownerVillage.id)) {
+      return CONSTANTS.TERRITORY_ACCESS.WAR;
+    }
+
+    // Trade track — formal trade/alliance partners or friendly+ relations
+    if (homeVillage.hasTradePartner?.(ownerVillage.id)) {
+      return CONSTANTS.TERRITORY_ACCESS.TRADE;
+    }
+    const relation = homeVillage.relations?.[ownerVillage.id] ?? CONSTANTS.VILLAGE_RELATION.NEUTRAL;
+    if (relation >= CONSTANTS.VILLAGE_RELATION.FRIENDLY_THRESHOLD) {
+      return CONSTANTS.TERRITORY_ACCESS.TRADE;
+    }
+
+    return null;
+  }
+
   canVillagerEnterTerritory(villager, x, y) {
     const owner = this.getTerritoryOwnerAt(x, y);
+    // Unclaimed wilderness is always traversable for scouting / travel
     if (!owner) return true;
+    // Home tribal lands
     if (owner.id === villager.villageId) return true;
     const home = this.getVillage(villager.villageId);
     if (!home) return false;
-    if (home.atWarWith?.includes(owner.id)) return true;
-    const relation = home.relations?.[owner.id] ?? CONSTANTS.VILLAGE_RELATION.NEUTRAL;
-    return relation >= CONSTANTS.VILLAGE_RELATION.FRIENDLY_THRESHOLD;
+    // Foreign claimed land: war (conquest) or trade track only
+    return this.getForeignTerritoryAccess(home, owner) != null;
   }
 
   canVillagersSocialize(villagerA, villagerB) {
@@ -111,8 +139,27 @@ class Game {
     const home = this.getVillage(villagerA.villageId);
     const other = this.getVillage(villagerB.villageId);
     if (!home || !other) return false;
+    // Wartime: no peaceful cross-tribe socializing
+    if (home.atWarWith?.includes(other.id)) return false;
+    // Trade track opens peaceful contact; first contact alone does not
+    if (home.hasTradePartner?.(other.id)) return true;
     const relation = home.relations?.[other.id] ?? CONSTANTS.VILLAGE_RELATION.NEUTRAL;
     return relation >= CONSTANTS.VILLAGE_RELATION.FRIENDLY_THRESHOLD;
+  }
+
+  // Mutual open borders on the trade/alliance track
+  establishTradeAccess(villageA, villageB) {
+    if (!villageA || !villageB || villageA.id === villageB.id) return false;
+    const addedA = villageA.addTradePartner(villageB.id);
+    const addedB = villageB.addTradePartner(villageA.id);
+    return addedA || addedB;
+  }
+
+  // Close trade-track borders (used when war starts)
+  revokeTradeAccess(villageA, villageB) {
+    if (!villageA || !villageB) return;
+    villageA.revokeTradePartner?.(villageB.id);
+    villageB.revokeTradePartner?.(villageA.id);
   }
 
   getSocialRange() {
@@ -135,7 +182,9 @@ class Game {
     }
 
     const candidates = this.villagers.filter(other =>
-      other.health > 0 && this.canVillagersSocialize(villager, other)
+      other.health > 0 &&
+      !other.isScouting &&
+      this.canVillagersSocialize(villager, other)
     );
     if (!candidates.length) return null;
 
@@ -236,6 +285,7 @@ class Game {
   }
 
   applySocialVillagerAction(villager, action) {
+    if (villager?.isScouting) return null;
     const wantsSocial = action?.action === CONSTANTS.ACTIVITY.SOCIALIZING || !!action?.interactionTarget;
     if (!wantsSocial) return null;
 
@@ -518,11 +568,34 @@ class Game {
     // Check raid cooldown
     if (village.raidCooldown > 0) return;
 
-    // Generate diplomatic action via LLM
     const context = {
       yourStrength: village.calculateStrength(this.villagers),
-      theirStrength: otherVillage.calculateStrength(this.villagers)
+      theirStrength: otherVillage.calculateStrength(this.villagers),
+      rivalDiscovered: this.explorationSystem?.hasDiscovered(village, otherVillage) || false
     };
+
+    if (!context.rivalDiscovered) {
+      this.explorationSystem?.dispatchScout(village, otherVillage, 'chieftan_order');
+      this.diplomaticEvents.push({
+        type: 'observe',
+        sourceVillageId: villageId,
+        targetVillageId: otherVillage.id,
+        reason: 'Scouts must find the other tribe before diplomacy can begin.',
+        urgency: 'low',
+        age: 0,
+        createdDay: this.timeState.day,
+        chieftanName: chieftan.name
+      });
+      if (this.benchmarkMode) {
+        this.recordBenchmarkEvent('diplomacy', {
+          villageId,
+          slot: this.benchmarkAgentMeta[villageId]?.slot,
+          action: 'observe',
+          reason: 'undiscovered rival'
+        });
+      }
+      return;
+    }
 
     const agent = this.benchmarkMode ? this.getBenchmarkAgent(villageId) : null;
     let decision;
@@ -997,6 +1070,14 @@ class Game {
     return false;
   }
 
+  // Economy / raid / exploration systems once villages exist
+  ensureVillageSystems() {
+    this.economy = new Economy(this);
+    this.raidSystem = new RaidSystem(this);
+    this.diplomacySystem = new DiplomacySystem(this);
+    this.explorationSystem = new ExplorationSystem(this);
+  }
+
   newWorld() {
     console.log('newWorld: Starting');
     // Generate new world (creates 2 village centers)
@@ -1012,10 +1093,7 @@ class Game {
     this.createVillages(2);
     this.ensureVillageResourceAccess();
 
-    // Economy / raid systems once villages exist
-    this.economy = new Economy(this);
-    this.raidSystem = new RaidSystem(this);
-    this.diplomacySystem = new DiplomacySystem(this);
+    this.ensureVillageSystems();
     this.hudVillageId = this.villages[0]?.id || null;
     this.nextChieftanDecision = {};
     this.hostileDaysCount = {};
@@ -1469,6 +1547,8 @@ class Game {
 
     // Process active raid
     this.processRaid(scaledDelta);
+
+    this.explorationSystem?.process();
 
     // Process chieftan diplomatic decisions
     this.processChieftanDecisions();
@@ -2530,9 +2610,7 @@ class Game {
     this.nextChieftanDecision = {};
 
     this.createVillages(2);
-    this.economy = new Economy(this);
-    this.raidSystem = new RaidSystem(this);
-    this.diplomacySystem = new DiplomacySystem(this);
+    this.ensureVillageSystems();
 
     this.createInitialVillagers();
     this.assignVillagersToVillages();
@@ -2568,15 +2646,20 @@ class Game {
 
   buildWorldStateForVillage(village, rival = null) {
     const structureIds = new Set(village.structureIds || []);
+    const discovered = rival ? (this.explorationSystem?.hasDiscovered(village, rival) || false) : false;
+    const territoryAccess = rival ? this.getForeignTerritoryAccess(village, rival) : null;
     const rivalInfo = rival ? {
       id: rival.id,
       name: rival.name,
-      center: { ...rival.center },
-      population: this.getVillagersForVillage(rival.id).length,
-      resources: this.getResources(rival.id),
+      discovered,
+      center: discovered ? { ...rival.center } : null,
+      population: discovered ? this.getVillagersForVillage(rival.id).length : null,
+      resources: discovered ? this.getResources(rival.id) : null,
       relation: village.relations?.[rival.id] || 0,
       atWar: village.atWarWith?.includes(rival.id) || false,
-      strength: Math.round(rival.calculateStrength(this.villagers) * 10) / 10
+      tradeOpen: territoryAccess === CONSTANTS.TERRITORY_ACCESS.TRADE,
+      territoryAccess,
+      strength: discovered ? Math.round(rival.calculateStrength(this.villagers) * 10) / 10 : null
     } : null;
 
     return {
@@ -2612,6 +2695,7 @@ class Game {
       if (!villager) continue;
 
       const hasCriticalNeeds = villager.hunger < 30 || (villager.thirst ?? 100) < 30 || villager.energy < 15;
+      if (villager.isScouting && !hasCriticalNeeds) continue;
       const isSurvivalAction = action.action === CONSTANTS.ACTIVITY.EATING ||
         action.action === CONSTANTS.ACTIVITY.DRINKING ||
         action.action === CONSTANTS.ACTIVITY.GATHERING ||
@@ -2728,6 +2812,7 @@ class Game {
     this.processEventQueue();
     this.processDiplomaticEvents();
     this.processRaid(scaledDelta);
+    this.explorationSystem?.process();
     this.processChieftanDecisions();
     this.checkDeaths();
 
@@ -2865,9 +2950,10 @@ class Game {
         const action = this.sanitizeVillagerAction(rawAction);
         const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
         if (villager) {
+          const hasCriticalNeeds = villager.hunger < 30 || (villager.thirst ?? 100) < 30 || villager.energy < 15;
+          if (villager.isScouting && !hasCriticalNeeds) continue;
           // Critical needs override: if villager is starving/dehydrated/exhausted,
           // skip non-survival actions to let them recover
-          const hasCriticalNeeds = villager.hunger < 30 || (villager.thirst ?? 100) < 30 || villager.energy < 15;
           const isSurvivalAction = action.action === CONSTANTS.ACTIVITY.EATING ||
             action.action === CONSTANTS.ACTIVITY.DRINKING ||
             action.action === CONSTANTS.ACTIVITY.GATHERING ||
@@ -3080,7 +3166,8 @@ class Game {
         v.status !== CONSTANTS.ACTIVITY.EATING &&
         v.status !== CONSTANTS.ACTIVITY.SLEEPING &&
         v.status !== CONSTANTS.ACTIVITY.RESTING &&
-        v.status !== CONSTANTS.ACTIVITY.SOCIALIZING
+        v.status !== CONSTANTS.ACTIVITY.SOCIALIZING &&
+        !v.isScouting
       )
       .sort((a, b) => {
         const aSkill = Math.max(a.skills.gathering || 0, a.skills.hunting || 0, a.skills.fishing || 0);
@@ -4761,9 +4848,7 @@ Respond with JSON: {
       }
 
       // Instantiate systems after villages restored
-      this.economy = new Economy(this);
-      this.raidSystem = new RaidSystem(this);
-      this.diplomacySystem = new DiplomacySystem(this);
+      this.ensureVillageSystems();
 
       // Migrate legacy Game.resources orphan pool if present
       if (saveData.resources) {

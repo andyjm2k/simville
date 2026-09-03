@@ -533,6 +533,7 @@ async function main() {
     'src/renderer/js/systems/economy.js',
     'src/renderer/js/systems/raid.js',
     'src/renderer/js/systems/diplomacy.js',
+    'src/renderer/js/systems/exploration.js',
     'src/renderer/js/systems/baseline-agent.js',
     'src/renderer/js/systems/benchmark.js',
     'src/renderer/js/systems/batch-runner.js',
