@@ -38,4 +38,20 @@ describe('QA: villager needs arbitration', () => {
     expect([CONSTANTS.ACTIVITY.DRINKING, CONSTANTS.ACTIVITY.GATHERING])
       .toContain(villager.status);
   });
+
+  it('seeks company when social need is critically low', () => {
+    const villager = game.villagers[0];
+    villager.status = CONSTANTS.ACTIVITY.IDLE;
+    villager.hunger = 90;
+    villager.thirst = 90;
+    villager.energy = 90;
+    villager.socialNeed = 5;
+    villager.personality.sociable = 80;
+    villager.activityDuration = 0;
+
+    villager.updateStatus(game.villagers);
+
+    expect(villager.status).toBe(CONSTANTS.ACTIVITY.SOCIALIZING);
+    expect(villager.socialPartnerId).toBeTruthy();
+  });
 });
