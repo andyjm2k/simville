@@ -17,9 +17,17 @@ describe('QA: village territory and tribal social boundaries', () => {
     const villageB = game.villages[1];
     const villagerA = game.getVillagersForVillage(villageA.id)[0];
 
+    // Place the villager on a known walkable home tile before testing the redirect
+    const homeTile = game.world.getWalkableTileNear(villageA.center.x, villageA.center.y, 2);
+    expect(homeTile).toBeTruthy();
+    villagerA.x = homeTile.x;
+    villagerA.y = homeTile.y;
+    villagerA.stopMoving();
+
     expect(game.canVillagerEnterTerritory(villagerA, villageB.center.x, villageB.center.y)).toBe(false);
 
-    villagerA.moveTo(villageB.center.x, villageB.center.y, game.world);
+    const moved = villagerA.moveTo(villageB.center.x, villageB.center.y, game.world);
+    expect(moved).toBe(true);
     expect(villageA.isInTerritory(villagerA.targetX, villagerA.targetY)).toBe(true);
     expect(villageB.isInTerritory(villagerA.targetX, villagerA.targetY)).toBe(false);
   });
