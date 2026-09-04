@@ -71,4 +71,33 @@ describe('Economy', () => {
     expect(economy.getHudVillage().id).toBe('a');
     expect(economy.getResourcesSnapshot(economy.getHudVillage().id).food).toBe(3);
   });
+
+  it('counts only owned storage barns toward capacity', () => {
+    gameStub.world = {
+      structures: [
+        { id: 'barn-a', type: 'storage' },
+        { id: 'barn-b', type: 'storage' }
+      ]
+    };
+    const village = new Village({
+      id: 'own',
+      structureIds: ['barn-a'],
+      resources: economy.getDefaultResources()
+    });
+    gameStub.villages = [village];
+    gameStub.hudVillageId = 'own';
+
+    expect(economy.getStorageCapacity('food', 'own')).toBe(170);
+  });
+
+  it('replace migration overwrites starter defaults for legacy orphan pools', () => {
+    const village = new Village({
+      id: 'legacy',
+      resources: { ...economy.getDefaultResources(), food: 12, wood: 15 }
+    });
+    gameStub.villages = [village];
+    economy.migrateOrphanResources({ food: 40, wood: 9 }, { replace: true });
+    expect(village.resources.food).toBe(40);
+    expect(village.resources.wood).toBe(9);
+  });
 });

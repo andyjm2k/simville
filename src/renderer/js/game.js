@@ -290,9 +290,8 @@ class Game {
     if (!wantsSocial) return null;
 
     const named = action.interactionTarget || (typeof action.target === 'string' ? action.target : null);
-    const namedTarget = named
-      ? this.villagers.find(v => v.name === named || v.id === named)
-      : null;
+    // Prefer same-tribe name matches so duplicate names across villages do not steal partners
+    const namedTarget = named ? this.resolveVillagerByNameOrId(named, villager.villageId) : null;
     const partner = this.findSocialPartner(villager, namedTarget);
 
     const socialAction = { ...action, action: CONSTANTS.ACTIVITY.SOCIALIZING };
@@ -477,7 +476,8 @@ class Game {
     const losingVillagers = this.getVillagersForVillage(losingVillageId);
     const priorWinningIds = new Set(winningVillage.villagerIds || []);
 
-    // Chronicle entry
+    // Chronicle: celebration + fall legend both belong to the surviving tribe
+    // (the losing village is removed below, so writing legends there would discard them)
     this.addChronicleEntry(
       `The ${losingVillage.name} has been conquered by ${winningVillage.name}! The era of ${losingVillage.name} ends as its people merge with their new allies.`,
       'celebration',
@@ -486,15 +486,26 @@ class Game {
     this.addChronicleEntry(
       `${losingVillage.name} falls to ${winningVillage.name}. The tribe's independence is lost.`,
       'legendary',
-      losingVillageId,
+      winningVillageId,
       { legendaryTitle: `Fall of ${losingVillage.name}` }
     );
-    // Winning tribe also records the conquest among its legends
     this.addLegendaryEntry(
       `Conquest of ${losingVillage.name}`,
       `The ${losingVillage.name} has been conquered by ${winningVillage.name}! The era of ${losingVillage.name} ends as its people merge with their new allies.`,
       winningVillageId
     );
+
+    // Preserve the fallen tribe's existing legends in the winner's chronicle
+    const preservedLegends = (losingVillage.chronicle?.legendary || []).map(entry => ({
+      title: this.sanitizeLegendaryTitle(entry?.title, entry?.text),
+      text: typeof entry?.text === 'string' ? entry.text : '',
+      day: entry?.day ?? this.timeState.day
+    }));
+    winningVillage.chronicle.legendary.push(...preservedLegends);
+    if (winningVillage.chronicle.legendary.length > 20) {
+      winningVillage.chronicle.legendary.length = 20;
+    }
+    this.chronicleDirty = true;
 
     // Transfer resources before village is removed
     if (this.economy) {
@@ -550,9 +561,8 @@ class Game {
     // End any wars
     winningVillage.atWarWith = winningVillage.atWarWith.filter(id => id !== losingVillageId);
 
-    if (this.hudVillageId === losingVillageId) {
-      this.hudVillageId = winningVillageId;
-    }
+    // Keep HUD / tribe selector on the surviving village
+    this.setSelectedVillage(winningVillageId);
   }
 
   // Trigger war between villages
@@ -1349,6 +1359,28 @@ class Game {
     if (byId) return byId.name;
     const byName = this.villagers.find(v => v.name === text);
     return byName?.name || null;
+  }
+
+  /**
+   * Resolve a villager by id or name, preferring the same tribe when names collide.
+   * @param {string} value
+   * @param {string|null} preferredVillageId
+   * @returns {object|null}
+   */
+  resolveVillagerByNameOrId(value, preferredVillageId = null) {
+    if (!value || !this.villagers?.length) return null;
+    const text = String(value);
+
+    const byId = this.villagers.find(v => v.id === text);
+    if (byId) return byId;
+
+    const matches = this.villagers.filter(v => v.name === text);
+    if (!matches.length) return null;
+    if (preferredVillageId) {
+      const sameTribe = matches.find(v => v.villageId === preferredVillageId);
+      if (sameTribe) return sameTribe;
+    }
+    return matches[0];
   }
 
   formatVillagerFacingText(text) {
@@ -3353,28 +3385,39 @@ class Game {
   runSurvivalBehaviors() {
     if (this.villagers.length === 0) return;
 
-    const foodRuleMultiplier = this.hasActiveRuleEffect('food_reserve') || this.hasActiveRuleEffect('farm_first') ? 1.45 : 1;
-    const waterRuleMultiplier = this.hasActiveRuleEffect('water_priority') ? 1.45 : 1;
-    const foodReserveTarget = Math.max(25, this.villagers.length * 8 * foodRuleMultiplier);
-    const waterReserveTarget = Math.max(25, this.villagers.length * 10 * waterRuleMultiplier);
-    const resources = this.getResources();
+    // Evaluate survival needs and emergency grants per village stockpile
+    for (const village of this.villages) {
+      this.runVillageSurvivalBehaviors(village);
+    }
+  }
+
+  runVillageSurvivalBehaviors(village) {
+    if (!village) return;
+    const villagers = this.getVillagersForVillage(village.id);
+    if (villagers.length === 0) return;
+
+    const foodRuleMultiplier = this.hasActiveRuleEffect('food_reserve', village.id) || this.hasActiveRuleEffect('farm_first', village.id) ? 1.45 : 1;
+    const waterRuleMultiplier = this.hasActiveRuleEffect('water_priority', village.id) ? 1.45 : 1;
+    const foodReserveTarget = Math.max(25, villagers.length * 8 * foodRuleMultiplier);
+    const waterReserveTarget = Math.max(25, villagers.length * 10 * waterRuleMultiplier);
+    const resources = this.getResources(village.id);
     const needsFood = resources.food < foodReserveTarget ||
-      this.villagers.some(v => v.hunger < 45);
+      villagers.some(v => v.hunger < 45);
     const needsWater = resources.water < waterReserveTarget ||
-      this.villagers.some(v => (v.thirst ?? 100) < 50);
-    const needsMaterials = this.needsConstructionMaterials();
+      villagers.some(v => (v.thirst ?? 100) < 50);
+    const needsMaterials = this.needsConstructionMaterials(village.id);
 
     if (!needsFood && !needsWater && !needsMaterials) return;
 
-    if (needsWater && resources.water < this.villagers.length) {
-      this.addResource(CONSTANTS.RESOURCE.WATER, Math.ceil(this.villagers.length * 3));
+    if (needsWater && resources.water < villagers.length) {
+      this.addResource(CONSTANTS.RESOURCE.WATER, Math.ceil(villagers.length * 3), village.id);
     }
 
-    if (needsFood && resources.food < Math.ceil(this.villagers.length / 2)) {
-      this.addResource(CONSTANTS.RESOURCE.FOOD, Math.ceil(this.villagers.length * 1.5));
+    if (needsFood && resources.food < Math.ceil(villagers.length / 2)) {
+      this.addResource(CONSTANTS.RESOURCE.FOOD, Math.ceil(villagers.length * 1.5), village.id);
     }
 
-    const workers = this.villagers
+    const workers = villagers
       .filter(v =>
         v.health > 0 &&
         v.energy > 25 &&
@@ -3391,8 +3434,8 @@ class Game {
         return bSkill - aSkill;
       });
 
-    const ruleWorkerBonus = this.hasActiveRuleEffect('food_reserve') || this.hasActiveRuleEffect('water_priority') ? 1 : 0;
-    const maxWorkers = Math.min(workers.length, Math.max(1, Math.ceil(this.villagers.length / 2) + ruleWorkerBonus));
+    const ruleWorkerBonus = this.hasActiveRuleEffect('food_reserve', village.id) || this.hasActiveRuleEffect('water_priority', village.id) ? 1 : 0;
+    const maxWorkers = Math.min(workers.length, Math.max(1, Math.ceil(villagers.length / 2) + ruleWorkerBonus));
     workers.slice(0, maxWorkers).forEach((worker, index) => {
       if (needsWater && (index === 0 || (worker.thirst ?? 100) < 60)) {
         if (this.assignWaterWork(worker)) return;
@@ -3408,7 +3451,7 @@ class Game {
     });
   }
 
-  needsConstructionMaterials() {
+  needsConstructionMaterials(villageId = null) {
     const reserves = {
       wood: 20,
       stone: 15,
@@ -3417,7 +3460,7 @@ class Game {
       herbs: 5
     };
 
-    return Object.entries(reserves).some(([resource, amount]) => (this.getResources()[resource] || 0) < amount);
+    return Object.entries(reserves).some(([resource, amount]) => (this.getResources(villageId)[resource] || 0) < amount);
   }
 
   assignWaterWork(villager) {
@@ -4388,49 +4431,67 @@ Respond with JSON: {
   }
 
   planAutonomousConstruction() {
-    if (this.constructionProjects.length > 0 || !this.world) return;
+    if (!this.world) return;
 
-    const structureId = this.chooseNeededStructure();
-    if (structureId) {
-      this.startConstructionProject(structureId, { source: 'autonomous' });
+    // Plan at most one project per tick, but evaluate each tribe's own stockpile
+    for (const village of this.villages) {
+      const villageProjects = this.constructionProjects.filter(p => p.villageId === village.id);
+      if (villageProjects.length > 0) continue;
+
+      const structureId = this.chooseNeededStructure(village.id);
+      if (structureId) {
+        this.startConstructionProject(structureId, {
+          source: 'autonomous',
+          villageId: village.id
+        });
+        return;
+      }
     }
   }
 
-  chooseNeededStructure() {
+  chooseNeededStructure(villageId = null) {
+    const village = this.getVillage(villageId) || this.getSelectedVillage();
+    if (!village) return null;
+
+    const villageVillagers = this.getVillagersForVillage(village.id);
+    const ownedIds = new Set(village.structureIds || []);
     const counts = this.world.structures.reduce((acc, structure) => {
+      if (!ownedIds.has(structure.id)) return acc;
       acc[structure.type] = (acc[structure.type] || 0) + 1;
       return acc;
     }, {});
 
     const pendingCounts = this.constructionProjects.reduce((acc, project) => {
+      if (project.villageId && project.villageId !== village.id) return acc;
       acc[project.type] = (acc[project.type] || 0) + 1;
       return acc;
     }, {});
 
     const hasOrPending = type => (counts[type] || 0) + (pendingCounts[type] || 0);
     const priorities = [];
+    const resources = this.getResources(village.id);
 
-    if (this.villagers.length + this.getExpectedBirthCount() >= this.getPopulationCapacity()) {
+    if (villageVillagers.length + this.getExpectedBirthCount(village.id) >= this.getPopulationCapacity(village.id)) {
       priorities.push('hut');
     }
 
-    if (this.hasActiveRuleEffect('construction_duty')) {
+    if (this.hasActiveRuleEffect('construction_duty', village.id)) {
       priorities.push('hut', 'farm', 'storage', 'workshop');
     }
 
-    if ((this.getResources().water || 0) < this.villagers.length * 8 && hasOrPending('well') < Math.max(1, Math.ceil(this.villagers.length / 8))) {
+    if ((resources.water || 0) < villageVillagers.length * 8 && hasOrPending('well') < Math.max(1, Math.ceil(villageVillagers.length / 8))) {
       priorities.push('well');
     }
 
-    if ((this.getResources().food || 0) < this.villagers.length * 8 && hasOrPending('farm') < Math.max(1, Math.ceil(this.villagers.length / 6))) {
+    if ((resources.food || 0) < villageVillagers.length * 8 && hasOrPending('farm') < Math.max(1, Math.ceil(villageVillagers.length / 6))) {
       priorities.push('farm');
     }
 
-    const capacity = this.getStorageCapacity();
+    const capacity = this.getStorageCapacity(null, village.id);
     const storagePressure = Object.values(CONSTANTS.RESOURCE).some(resource =>
-      (this.getResources()[resource] || 0) > (capacity[resource] || 1) * 0.82
+      (resources[resource] || 0) > (capacity[resource] || 1) * 0.82
     );
-    if (storagePressure && hasOrPending('storage') < Math.max(1, Math.ceil(this.villagers.length / 10))) {
+    if (storagePressure && hasOrPending('storage') < Math.max(1, Math.ceil(villageVillagers.length / 10))) {
       priorities.push('storage');
     }
 
@@ -4440,7 +4501,7 @@ Respond with JSON: {
 
     return priorities.find(id => {
       const struct = this.getStructureDefById(id);
-      return struct && this.canAffordStructure(struct) && this.findBuildLocation(id);
+      return struct && this.canAffordStructure(struct, village.id) && this.findBuildLocation(id, village.id);
     }) || null;
   }
 
@@ -4448,31 +4509,36 @@ Respond with JSON: {
     const struct = this.getStructureDefById(structureId);
     if (!struct) return false;
 
-    if (this.constructionProjects.some(project => project.type === struct.id)) {
+    // Prefer explicit tribe ownership (HUD / caller) over whichever builder happens to be free
+    const villageId = options.villageId || this.hudVillageId || null;
+
+    if (this.constructionProjects.some(project =>
+      project.type === struct.id && (!villageId || project.villageId === villageId)
+    )) {
       if (options.source === 'manual') this.ui.showToast(`${struct.name} is already under construction.`, true);
       return false;
     }
 
-    const builder = this.selectBuilder(options.builderId);
+    const builder = this.selectBuilder(options.builderId, villageId);
     if (!builder) {
       if (options.source === 'manual') this.ui.showToast('No available builder.', true);
       return false;
     }
 
-    const villageId = options.villageId || builder.villageId || this.hudVillageId || null;
+    const ownerVillageId = villageId || builder.villageId || this.villages[0]?.id || null;
 
-    if (!this.canAffordStructure(struct, villageId)) {
+    if (!this.canAffordStructure(struct, ownerVillageId)) {
       if (options.source === 'manual') this.ui.showToast(`Not enough resources for ${struct.name}.`, true);
       return false;
     }
 
-    const buildLoc = this.findBuildLocation(struct.id, villageId);
+    const buildLoc = this.findBuildLocation(struct.id, ownerVillageId);
     if (!buildLoc) {
       if (options.source === 'manual') this.ui.showToast('No valid build location found!', true);
       return false;
     }
 
-    if (!this.consumeStructureCost(struct, villageId)) return false;
+    if (!this.consumeStructureCost(struct, ownerVillageId)) return false;
 
     const project = {
       id: Utils.generateId(),
@@ -4481,7 +4547,7 @@ Respond with JSON: {
       x: buildLoc.x,
       y: buildLoc.y,
       builderId: builder.id,
-      villageId,
+      villageId: ownerVillageId,
       progress: 0,
       workRequired: this.getStructureWorkRequired(struct),
       startedDay: this.timeState.day,
@@ -4495,7 +4561,7 @@ Respond with JSON: {
     builder.moveTo(project.x, project.y, this.world);
     builder.showSpeechBubble('🏗️', `Building ${struct.name}`, 4000);
 
-    this.addChronicleEntry(`${builder.name} has begun building a ${struct.name}.`);
+    this.addChronicleEntry(`${builder.name} has begun building a ${struct.name}.`, 'normal', ownerVillageId);
     if (options.source === 'manual') this.ui.showToast(`${struct.name} construction started.`);
     return true;
   }
@@ -4507,7 +4573,7 @@ Respond with JSON: {
     this.constructionProjects.forEach(project => {
       let builder = this.villagers.find(v => v.id === project.builderId && v.health > 0);
       if (!builder || builder.lifeStage?.canWork === false) {
-        builder = this.selectBuilder();
+        builder = this.selectBuilder(null, project.villageId);
         project.builderId = builder?.id || null;
       }
       if (!builder) return;
@@ -4568,12 +4634,13 @@ Respond with JSON: {
     this.ui.showToast(`${project.name} built!`);
   }
 
-  selectBuilder(preferredBuilderId = null) {
+  selectBuilder(preferredBuilderId = null, villageId = null) {
     const candidates = this.villagers
       .filter(v =>
         v.health > 0 &&
         v.energy > 20 &&
         v.lifeStage?.canWork !== false &&
+        (!villageId || v.villageId === villageId) &&
         v.status !== CONSTANTS.ACTIVITY.SLEEPING &&
         v.status !== CONSTANTS.ACTIVITY.EATING &&
         v.status !== CONSTANTS.ACTIVITY.DRINKING
@@ -4583,6 +4650,13 @@ Respond with JSON: {
     if (preferredBuilderId) {
       const preferred = candidates.find(v => v.id === preferredBuilderId);
       if (preferred) return preferred;
+      // Preferred builder may be from another tribe — still allow if they match village filter
+      const anyPreferred = this.villagers.find(v =>
+        v.id === preferredBuilderId &&
+        v.health > 0 &&
+        (!villageId || v.villageId === villageId)
+      );
+      if (anyPreferred) return anyPreferred;
     }
 
     return candidates[0] || null;
@@ -4821,7 +4895,9 @@ Respond with JSON: {
   buildStructure(structureId) {
     return this.startConstructionProject(structureId, {
       source: 'manual',
-      builderId: this.selectedVillager?.id
+      builderId: this.selectedVillager?.id,
+      // Charge and place for the tribe shown in the resource HUD
+      villageId: this.hudVillageId || this.selectedVillager?.villageId || null
     });
   }
 
@@ -4900,8 +4976,10 @@ Respond with JSON: {
   deriveLegendaryTitle(text) {
     if (!text || typeof text !== 'string') return 'A Village Legend';
     const cleaned = text.replace(/\s+/g, ' ').trim();
+    if (!cleaned || this.isInvalidLegendTitle(cleaned)) return 'A Village Legend';
     const firstClause = cleaned.split(/[.!?]/)[0]?.trim() || cleaned;
-    if (firstClause.length <= 48) return firstClause || 'A Village Legend';
+    if (!firstClause || this.isInvalidLegendTitle(firstClause)) return 'A Village Legend';
+    if (firstClause.length <= 48) return firstClause;
     return `${firstClause.slice(0, 45).trim()}…`;
   }
 
@@ -4978,6 +5056,30 @@ Respond with JSON: {
   }
 
   /**
+   * True when a chronicle looks like an empty default (safe to overwrite with legacy save data).
+   * @param {object|null} chronicle
+   * @returns {boolean}
+   */
+  isEmptyChronicle(chronicle) {
+    if (!chronicle || typeof chronicle !== 'object') return true;
+    const legendary = chronicle.legendary || [];
+    const entries = chronicle.entries || [];
+    const stats = chronicle.stats || {};
+    const statSum = Object.values(stats).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    return legendary.length === 0 && entries.length === 0 && statSum === 0;
+  }
+
+  /**
+   * True when tech state has no research progress worth preserving.
+   * @param {object|null} techState
+   * @returns {boolean}
+   */
+  isEmptyTechState(techState) {
+    if (!techState || typeof techState !== 'object') return true;
+    return (!techState.researched || techState.researched.length === 0) && !techState.currentResearch;
+  }
+
+  /**
    * Repair legendary rows loaded from older saves (missing / "undefined" titles).
    * @param {object} chronicle
    * @returns {object}
@@ -4997,9 +5099,9 @@ Respond with JSON: {
       if (typeof entry === 'string') {
         const text = entry.trim();
         return {
-          title: this.deriveLegendaryTitle(text),
+          title: this.sanitizeLegendaryTitle(null, text),
           text,
-          day: this.timeState?.day || 1
+          day: null
         };
       }
 
@@ -5008,7 +5110,7 @@ Respond with JSON: {
       return {
         title,
         text,
-        day: entry?.day ?? this.timeState?.day ?? 1
+        day: entry?.day ?? null
       };
     });
 
@@ -5152,9 +5254,9 @@ Respond with JSON: {
       // Instantiate systems after villages restored
       this.ensureVillageSystems();
 
-      // Migrate legacy Game.resources orphan pool if present
-      if (saveData.resources) {
-        this.economy.migrateOrphanResources(saveData.resources);
+      // Migrate legacy Game.resources orphan pool only for pre-multi-village saves
+      if (saveData.resources && !saveData.villages) {
+        this.economy.migrateOrphanResources(saveData.resources, { replace: true });
       }
 
       // Restore time
@@ -5162,14 +5264,17 @@ Respond with JSON: {
 
       // Restore per-village chronicle/tech (migrate legacy global saves)
       this.villages.forEach((village, index) => {
-        if (!village.chronicle) {
+        const chronicleIsEmpty = this.isEmptyChronicle(village.chronicle);
+        if (!village.chronicle || (index === 0 && chronicleIsEmpty && saveData.chronicle)) {
           village.chronicle = index === 0 && saveData.chronicle
             ? saveData.chronicle
             : village.createDefaultChronicle();
         }
         // Repair missing / "undefined" legend titles from older saves
         village.chronicle = this.normalizeChronicleLegendary(village.chronicle);
-        if (!village.techState) {
+
+        const techIsEmpty = this.isEmptyTechState(village.techState);
+        if (!village.techState || (index === 0 && techIsEmpty && saveData.techState)) {
           village.techState = index === 0 && saveData.techState
             ? saveData.techState
             : village.createDefaultTechState();
