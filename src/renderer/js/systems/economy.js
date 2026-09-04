@@ -118,8 +118,9 @@ class Economy {
   getStorageCapacity(resourceType = null, villageId = null) {
     const village = this.resolveVillage(villageId);
     const structureIds = new Set(village?.structureIds || []);
+    // Only barns owned by this village count; empty ownership means base capacity only
     const storageCount = (this.game.world?.structures || []).filter(
-      (s) => s.type === 'storage' && (structureIds.size === 0 || structureIds.has(s.id) || !village)
+      (s) => s.type === 'storage' && structureIds.has(s.id)
     ).length;
 
     const baseCapacity = {
@@ -249,10 +250,18 @@ class Economy {
   /**
    * Migrate legacy Game.resources orphan pool into village 0 (save loads).
    * @param {object|null} orphanResources
+   * @param {{ replace?: boolean }} options - when replace, overwrite starter defaults
    */
-  migrateOrphanResources(orphanResources) {
+  migrateOrphanResources(orphanResources, options = {}) {
     if (!orphanResources || !this.game.villages?.length) return;
     const target = this.game.villages[0];
+    if (options.replace) {
+      // Legacy single-village saves: orphan pool is the true stockpile
+      target.resources = this.normalizeResources(orphanResources);
+      this.clampStoredResources(target.id);
+      return;
+    }
+
     target.resources = this.normalizeResources(target.resources);
     for (const [key, value] of Object.entries(orphanResources)) {
       if (!Number.isFinite(value) || value <= 0) continue;

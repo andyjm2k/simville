@@ -18,6 +18,9 @@ describe('QA: socializing restores social need and does not loop', () => {
     const mates = game.getVillagersForVillage(villageId);
     const a = mates[0];
     const b = mates[1];
+    // Unique names avoid cross-village collisions in interactionTarget resolution
+    a.name = 'SocialAlpha';
+    b.name = 'SocialBeta';
     for (const villager of game.villagers) {
       villager.hunger = 95;
       villager.thirst = 95;
@@ -94,14 +97,19 @@ describe('QA: socializing restores social need and does not loop', () => {
   it('does not repath every social action while already walking to a meetup', () => {
     const { a, b } = tribeMates();
     const village = game.getVillage(a.villageId);
-    a.x = village.center.x - 5;
-    a.y = village.center.y - 5;
-    b.x = village.center.x + 5;
-    b.y = village.center.y + 5;
+    const left = game.world.getWalkableTileNear(village.center.x - 5, village.center.y - 5, 2);
+    const right = game.world.getWalkableTileNear(village.center.x + 5, village.center.y + 5, 2);
+    expect(left).toBeTruthy();
+    expect(right).toBeTruthy();
+    a.x = left.x;
+    a.y = left.y;
+    b.x = right.x;
+    b.y = right.y;
+    a.stopMoving();
 
     game.applySocialVillagerAction(a, {
       action: CONSTANTS.ACTIVITY.SOCIALIZING,
-      interactionTarget: b.name,
+      interactionTarget: b.id,
       moveTo: { x: Math.round(b.x), y: Math.round(b.y) }
     });
 
@@ -111,7 +119,7 @@ describe('QA: socializing restores social need and does not loop', () => {
 
     game.applySocialVillagerAction(a, {
       action: CONSTANTS.ACTIVITY.SOCIALIZING,
-      interactionTarget: b.name,
+      interactionTarget: b.id,
       moveTo: { x: Math.round(b.x), y: Math.round(b.y) }
     });
 
@@ -123,15 +131,19 @@ describe('QA: socializing restores social need and does not loop', () => {
   it('walks toward a distant partner instead of cancelling the social action', () => {
     const { a, b } = tribeMates();
     const village = game.getVillage(a.villageId);
-    a.x = village.center.x - 6;
-    a.y = village.center.y;
-    b.x = village.center.x + 6;
-    b.y = village.center.y;
+    const left = game.world.getWalkableTileNear(village.center.x - 5, village.center.y, 2);
+    const right = game.world.getWalkableTileNear(village.center.x + 5, village.center.y, 2);
+    expect(left).toBeTruthy();
+    expect(right).toBeTruthy();
+    a.x = left.x;
+    a.y = left.y;
+    b.x = right.x;
+    b.y = right.y;
     a.stopMoving();
 
     const result = game.applySocialVillagerAction(a, {
       action: CONSTANTS.ACTIVITY.SOCIALIZING,
-      interactionTarget: b.name,
+      interactionTarget: b.id,
       interactionType: 'talk',
       speechTheme: 'Hello'
     });
