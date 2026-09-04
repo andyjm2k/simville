@@ -64,15 +64,25 @@ class Economy {
   }
 
   /**
-   * Village shown in the resource HUD (selected villager's village, else first).
+   * Village shown in the resource HUD.
+   * Prefers the tribe selector (hudVillageId) so each village's stockpile can be viewed.
+   * Falls back to the selected villager's tribe, then the first village.
    * @returns {object|null}
    */
   getHudVillage() {
-    const selectedId = this.game.selectedVillager?.villageId || this.game.hudVillageId;
-    if (selectedId) {
-      const selected = this.game.getVillage(selectedId);
-      if (selected) return selected;
+    // Tribe selector is the intentional HUD ownership signal
+    if (this.game.hudVillageId) {
+      const fromHud = this.game.getVillage(this.game.hudVillageId);
+      if (fromHud) return fromHud;
     }
+
+    // Fall back to the selected villager's village when no tribe is selected yet
+    const selectedId = this.game.selectedVillager?.villageId;
+    if (selectedId) {
+      const fromVillager = this.game.getVillage(selectedId);
+      if (fromVillager) return fromVillager;
+    }
+
     return this.game.villages?.[0] || null;
   }
 

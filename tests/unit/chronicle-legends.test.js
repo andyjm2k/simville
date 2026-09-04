@@ -78,4 +78,16 @@ describe('Chronicle legends', () => {
     expect(items[0].textContent).toContain('An old tale of the founders.');
     expect(items[0].textContent).not.toMatch(/undefined/i);
   });
+
+  it('does not show undefined when a saved legend title is the string undefined', () => {
+    const village = game.villages[0];
+    village.chronicle.legendary = [
+      { title: 'undefined', text: 'Discovered Fire Mastery: Control of fire.', day: 9 }
+    ];
+
+    game.ui.showChronicle(village.chronicle);
+    const items = [...game.ui.elements.chronicleLegendaryList.querySelectorAll('li')];
+    expect(items[0].textContent).toContain('Discovered Fire Mastery');
+    expect(items[0].textContent).not.toMatch(/\bundefined\b/i);
+  });
 });

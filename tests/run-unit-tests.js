@@ -299,10 +299,20 @@ test('migrateOrphanResources seeds village 0', () => {
   assert.strictEqual(a.resources.wood, 9);
 });
 
-test('getHudVillage prefers selected villager village', () => {
+test('getHudVillage prefers tribe selector over selected villager', () => {
   const a = makeVillage('a');
   const b = makeVillage('b');
   const game = makeGame([a, b]);
+  game.hudVillageId = 'a';
+  game.selectedVillager = { villageId: 'b' };
+  assert.strictEqual(game.economy.getHudVillage().id, 'a');
+});
+
+test('getHudVillage falls back to selected villager when no tribe selected', () => {
+  const a = makeVillage('a');
+  const b = makeVillage('b');
+  const game = makeGame([a, b]);
+  game.hudVillageId = null;
   game.selectedVillager = { villageId: 'b' };
   assert.strictEqual(game.economy.getHudVillage().id, 'b');
 });
