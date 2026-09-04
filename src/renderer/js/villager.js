@@ -605,12 +605,26 @@ class Villager {
     if (!options.allowCrossTerritory && game?.canVillagerEnterTerritory && !game.canVillagerEnterTerritory(this, destination.x, destination.y)) {
       const village = game.getVillage?.(this.villageId);
       if (!village) return false;
-      destination = world.getWalkableTileNear(
-        village.center.x + Utils.randomFloat(-3, 3),
-        village.center.y + Utils.randomFloat(-3, 3),
-        4
-      );
+
+      // Prefer the village center first so redirects stay inside territory reliably
+      destination = world.getWalkableTileNear(village.center.x, village.center.y, 3);
+      if (!destination || !village.isInTerritory(destination.x, destination.y)) {
+        destination = world.getWalkableTileNear(
+          village.center.x + Utils.randomFloat(-2, 2),
+          village.center.y + Utils.randomFloat(-2, 2),
+          3
+        );
+      }
       if (!destination || !village.isInTerritory(destination.x, destination.y)) return false;
+    }
+
+    // Already standing on the allowed tile — treat as a successful stay/redirect
+    if (Math.round(this.x) === destination.x && Math.round(this.y) === destination.y) {
+      this.path = [];
+      this.isMoving = false;
+      this.targetX = destination.x;
+      this.targetY = destination.y;
+      return true;
     }
 
     const path = world.getPath(Math.round(this.x), Math.round(this.y), destination.x, destination.y);

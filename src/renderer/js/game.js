@@ -290,9 +290,8 @@ class Game {
     if (!wantsSocial) return null;
 
     const named = action.interactionTarget || (typeof action.target === 'string' ? action.target : null);
-    const namedTarget = named
-      ? this.villagers.find(v => v.name === named || v.id === named)
-      : null;
+    // Prefer same-tribe name matches so duplicate names across villages do not steal partners
+    const namedTarget = named ? this.resolveVillagerByNameOrId(named, villager.villageId) : null;
     const partner = this.findSocialPartner(villager, namedTarget);
 
     const socialAction = { ...action, action: CONSTANTS.ACTIVITY.SOCIALIZING };
@@ -1349,6 +1348,28 @@ class Game {
     if (byId) return byId.name;
     const byName = this.villagers.find(v => v.name === text);
     return byName?.name || null;
+  }
+
+  /**
+   * Resolve a villager by id or name, preferring the same tribe when names collide.
+   * @param {string} value
+   * @param {string|null} preferredVillageId
+   * @returns {object|null}
+   */
+  resolveVillagerByNameOrId(value, preferredVillageId = null) {
+    if (!value || !this.villagers?.length) return null;
+    const text = String(value);
+
+    const byId = this.villagers.find(v => v.id === text);
+    if (byId) return byId;
+
+    const matches = this.villagers.filter(v => v.name === text);
+    if (!matches.length) return null;
+    if (preferredVillageId) {
+      const sameTribe = matches.find(v => v.villageId === preferredVillageId);
+      if (sameTribe) return sameTribe;
+    }
+    return matches[0];
   }
 
   formatVillagerFacingText(text) {
