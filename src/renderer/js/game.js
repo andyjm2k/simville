@@ -354,6 +354,14 @@ class Game {
     const village = this.getVillage(villageId);
     if (!village) return;
     this.hudVillageId = village.id;
+
+    // Drop cross-tribe villager focus so the resource bar stays on the selected tribe
+    if (this.selectedVillager && this.selectedVillager.villageId !== village.id) {
+      this.selectedVillager = null;
+      this.cameraTarget = null;
+      this.ui?.closePanel?.('villager-panel');
+    }
+
     this.chronicleDirty = true;
     this.ui?.updateTribeSelector?.(this.villages, village.id);
     const displayResources = this.getHudResources();
@@ -895,7 +903,8 @@ class Game {
   }
 
   getHudResources() {
-    return this.economy.getResourcesSnapshot(this.economy.getHudVillage()?.id);
+    // Always read the tribe currently selected in the HUD / tribe selector
+    return this.economy.getResourcesSnapshot(this.getSelectedVillage()?.id);
   }
 
   createDefaultGovernment() {
@@ -4925,7 +4934,8 @@ Respond with JSON: {
     const village = this.getVillage(resolvedId);
     if (!village) return;
 
-    const safeTitle = (title && String(title).trim()) || this.deriveLegendaryTitle(text);
+    // Reject coerced "undefined"/"null" titles left by older writers or bad saves
+    const safeTitle = this.sanitizeLegendaryTitle(title, text);
     const day = this.timeState.day;
 
     // Avoid duplicate legend rows for the same event on the same day
@@ -4944,6 +4954,65 @@ Respond with JSON: {
     if (village.chronicle.legendary.length > 20) {
       village.chronicle.legendary.pop();
     }
+  }
+
+  /**
+   * Ensure legend titles are real strings (never the literal "undefined").
+   * @param {*} title
+   * @param {string} text
+   * @returns {string}
+   */
+  sanitizeLegendaryTitle(title, text) {
+    const trimmed = typeof title === 'string' ? title.trim() : '';
+    if (trimmed && !this.isInvalidLegendTitle(trimmed)) return trimmed;
+    return this.deriveLegendaryTitle(text);
+  }
+
+  /** True when a title is empty or a stringified undefined/null. */
+  isInvalidLegendTitle(value) {
+    if (value == null) return true;
+    const text = String(value).trim();
+    if (!text) return true;
+    const lower = text.toLowerCase();
+    return lower === 'undefined' || lower === 'null' || lower === 'nan';
+  }
+
+  /**
+   * Repair legendary rows loaded from older saves (missing / "undefined" titles).
+   * @param {object} chronicle
+   * @returns {object}
+   */
+  normalizeChronicleLegendary(chronicle) {
+    if (!chronicle || typeof chronicle !== 'object') {
+      return this.villages[0]?.createDefaultChronicle?.() || {
+        legendary: [],
+        entries: [],
+        stats: { births: 0, deaths: 0, structuresBuilt: 0, marriages: 0 }
+      };
+    }
+
+    const legendary = Array.isArray(chronicle.legendary) ? chronicle.legendary : [];
+    chronicle.legendary = legendary.map((entry) => {
+      // Promote plain-string legends into titled objects
+      if (typeof entry === 'string') {
+        const text = entry.trim();
+        return {
+          title: this.deriveLegendaryTitle(text),
+          text,
+          day: this.timeState?.day || 1
+        };
+      }
+
+      const text = typeof entry?.text === 'string' ? entry.text : '';
+      const title = this.sanitizeLegendaryTitle(entry?.title, text);
+      return {
+        title,
+        text,
+        day: entry?.day ?? this.timeState?.day ?? 1
+      };
+    });
+
+    return chronicle;
   }
 
   render() {
@@ -5098,6 +5167,8 @@ Respond with JSON: {
             ? saveData.chronicle
             : village.createDefaultChronicle();
         }
+        // Repair missing / "undefined" legend titles from older saves
+        village.chronicle = this.normalizeChronicleLegendary(village.chronicle);
         if (!village.techState) {
           village.techState = index === 0 && saveData.techState
             ? saveData.techState

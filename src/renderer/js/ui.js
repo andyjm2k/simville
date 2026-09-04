@@ -325,6 +325,35 @@ class UIManager {
     return Math.max(0, Math.floor(value || 0));
   }
 
+  /**
+   * Build a display label for a legend row, repairing incomplete or corrupted saves.
+   * Rejects missing titles and the literal strings "undefined" / "null".
+   * @param {object|string} entry
+   * @returns {string}
+   */
+  formatLegendaryLabel(entry) {
+    // Legacy saves sometimes stored legends as plain strings
+    if (typeof entry === 'string') {
+      const trimmed = entry.trim();
+      return trimmed && !this.isInvalidLegendTitle(trimmed) ? trimmed : 'Untitled Legend';
+    }
+
+    const rawTitle = typeof entry?.title === 'string' ? entry.title.trim() : '';
+    const rawText = typeof entry?.text === 'string' ? entry.text.trim() : '';
+    if (rawTitle && !this.isInvalidLegendTitle(rawTitle)) return rawTitle;
+    if (rawText && !this.isInvalidLegendTitle(rawText)) return rawText;
+    return 'Untitled Legend';
+  }
+
+  /** True when a stored title is missing or a coerced undefined/null string. */
+  isInvalidLegendTitle(value) {
+    if (value == null) return true;
+    const text = String(value).trim();
+    if (!text) return true;
+    const lower = text.toLowerCase();
+    return lower === 'undefined' || lower === 'null' || lower === 'nan';
+  }
+
   showVillagerPanel(villager) {
     if (!villager) {
       this.closePanel('villager-panel');
@@ -696,8 +725,8 @@ class UIManager {
     legendaryEntries.forEach(entry => {
       const li = document.createElement('li');
       li.className = 'legendary-item';
-      // Prefer title; fall back to text so incomplete saves never show "undefined"
-      const label = entry.title || entry.text || 'Untitled Legend';
+      // Prefer a real title; never display the literal string "undefined" from bad saves
+      const label = this.formatLegendaryLabel(entry);
       li.textContent = `★ ${label} (Day ${entry.day ?? '?'})`;
       this.elements.chronicleLegendaryList.appendChild(li);
     });

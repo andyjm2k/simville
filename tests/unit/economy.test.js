@@ -54,4 +54,21 @@ describe('Economy', () => {
     expect(loser.resources.food).toBe(0);
     expect(loser.resources.wood).toBe(0);
   });
+
+  it('prefers hudVillageId over selectedVillager for the resource HUD', () => {
+    const villageA = new Village({
+      id: 'a',
+      resources: { ...economy.getDefaultResources(), food: 3 }
+    });
+    const villageB = new Village({
+      id: 'b',
+      resources: { ...economy.getDefaultResources(), food: 9 }
+    });
+    gameStub.villages = [villageA, villageB];
+    gameStub.hudVillageId = 'a';
+    gameStub.selectedVillager = { villageId: 'b' };
+
+    expect(economy.getHudVillage().id).toBe('a');
+    expect(economy.getResourcesSnapshot(economy.getHudVillage().id).food).toBe(3);
+  });
 });
