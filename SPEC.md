@@ -868,17 +868,20 @@ simville/
 │   │   ├── css/
 │   │   │   └── style.css         # UI styling
 │   │   ├── js/
-│   │   │   ├── game.js          # Main game loop
-│   │   │   ├── world.js         # World generation & rendering
-│   │   │   ├── villager.js      # Villager class & AI
-│   │   │   ├── ui.js            # UI management
-│   │   │   ├── llm.js           # LLM API integration
-│   │   │   ├── audio.js        # Audio management
-│   │   │   └── utils.js         # Utility functions
-│   │   └── assets/
-│   │       ├── sprites/         # Pixel art sprites
-│   │       ├── fonts/            # Pixel font
-│   │       └── sounds/           # Audio files
+│   │   │   ├── game.js           # Main game loop
+│   │   │   ├── visual-fx.js      # Terrain cache, lighting cutouts, particles, ambient FX
+│   │   │   ├── pixel-art.js      # Bitmap font, resource icons, villager sprite factory
+│   │   │   ├── world.js          # World generation & rendering
+│   │   │   ├── village.js        # Village entity
+│   │   │   ├── villager.js       # Villager AI & sprite rendering
+│   │   │   ├── ui.js             # UI management
+│   │   │   ├── llm.js            # LLM API integration
+│   │   │   ├── utils.js          # Utility functions
+│   │   │   └── systems/          # Economy, raids, diplomacy, exploration, benchmarks
+│   │   └── assets/ (optional future)
+│   │       ├── sprites/          # Pixel art sprite atlas (deferred)
+│   │       ├── fonts/            # External pixel fonts (canvas bitmap font in pixel-art.js)
+│   │       └── sounds/           # Audio files (audio.js still deferred)
 │   └── shared/
 │       └── constants.js         # Shared constants
 ├── saves/                        # Save files directory
@@ -917,10 +920,11 @@ simville/
 
 ### 20.4 Visual Polish
 
-- [ ] Pixel art renders crisply at all zoom levels
-- [ ] Lighting changes smoothly with time of day
-- [ ] Animations play for walking, working, idle states
-- [ ] UI is readable and consistent in style
+- [x] Pixel art renders crisply at all zoom levels (procedural sprites + integer draws + LOD)
+- [x] Lighting changes with time of day (toggleable; night fire cutouts)
+- [x] Animations play for walking, working, idle/sleep states (procedural frames)
+- [x] UI labels use a consistent pixel bitmap font on the canvas; HUD chrome remains dark panel style
+- [ ] Full 16-bit PNG sprite atlas and custom UI `@font-face` (optional future polish)
 
 ### 20.5 Edge Cases
 
@@ -948,7 +952,7 @@ simville/
 ### 20.8 Seasonal Cycle
 
 - [ ] Seasons cycle automatically (Wet → Dry → Harvest → Deep Dry)
-- [ ] Each season has distinct visual and gameplay effects
+- [x] Each season has distinct visual and gameplay effects (ground remaps + rain/dust particles + mood/resources)
 - [ ] Resource availability changes with seasons
 - [ ] Villager moods affected by seasons
 - [ ] Village can prepare for seasons (strategic depth)

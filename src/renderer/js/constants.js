@@ -541,7 +541,7 @@ const CONSTANTS = {
     NAME_SUFFIXES: ['vale', 'hollow', 'fall', 'peak', 'ridge', 'glen', 'mere', 'fell', 'brook', 'watch', 'haven', 'crest']
   },
 
-  // Biome icons for tile rendering
+  // Biome icons retained for HUD/legacy references; world tiles no longer stamp emoji overlays
   BIOME_ICON: {
     0: '🌊', // Ocean
     1: '🌴', // Tropical Rainforest

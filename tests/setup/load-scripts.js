@@ -14,6 +14,8 @@ const RENDERER_JS = path.resolve(__dirname, '../../src/renderer/js');
 const CORE_SCRIPT_ORDER = [
   'utils.js',
   'constants.js',
+  'visual-fx.js',
+  'pixel-art.js',
   'llm.js',
   'world.js',
   'village.js',
@@ -32,6 +34,14 @@ const SYSTEM_SCRIPT_ORDER = [
 const SCRIPT_EXPORTS = {
   'utils.js': ['Utils'],
   'constants.js': ['CONSTANTS'],
+  'visual-fx.js': [
+    'SeasonPalette',
+    'TerrainCache',
+    'LightingLayer',
+    'ParticleSystem',
+    'AmbientFX'
+  ],
+  'pixel-art.js': ['PixelFont', 'PixelIcons', 'VillagerSpriteFactory'],
   'llm.js': ['LLMManager', 'llm'],
   'world.js': ['World', 'WorldRenderer'],
   'village.js': ['Village'],
@@ -49,6 +59,14 @@ const SCRIPT_EXPORTS = {
 const GLOBAL_EXPORTS = [
   'Utils',
   'CONSTANTS',
+  'SeasonPalette',
+  'TerrainCache',
+  'LightingLayer',
+  'ParticleSystem',
+  'AmbientFX',
+  'PixelFont',
+  'PixelIcons',
+  'VillagerSpriteFactory',
   'LLMManager',
   'World',
   'Village',

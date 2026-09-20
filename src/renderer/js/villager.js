@@ -875,16 +875,36 @@ class Villager {
 class VillagerRenderer {
   constructor(ctx) {
     this.ctx = ctx;
+    // Cached procedural 16x16 sprites keyed by appearance + pose
     this.spriteCache = new Map();
+    this.maxCacheEntries = 256;
+  }
+
+  /** Clear sprite cache (e.g. after graphics reset). */
+  clearSpriteCache() {
+    this.spriteCache.clear();
+  }
+
+  /** Fetch or build a cached sprite canvas for the current pose. */
+  getCachedSprite(parts) {
+    const key = VillagerSpriteFactory.cacheKey(parts);
+    if (this.spriteCache.has(key)) return this.spriteCache.get(key);
+    const canvas = VillagerSpriteFactory.build(parts);
+    if (this.spriteCache.size >= this.maxCacheEntries) {
+      const firstKey = this.spriteCache.keys().next().value;
+      this.spriteCache.delete(firstKey);
+    }
+    this.spriteCache.set(key, canvas);
+    return canvas;
   }
 
   render(villager, camera, scale, showSpeechBubbles = true) {
     const ctx = this.ctx;
     const sprite = villager.getSpriteData();
 
-    // Calculate screen position
-    const screenX = sprite.x * CONSTANTS.WORLD.TILE_SIZE * scale * camera.zoom - camera.x;
-    const screenY = sprite.y * CONSTANTS.WORLD.TILE_SIZE * scale * camera.zoom - camera.y;
+    // Integer screen positions keep pixel art crisp under zoom
+    const screenX = Math.floor(sprite.x * CONSTANTS.WORLD.TILE_SIZE * scale * camera.zoom - camera.x);
+    const screenY = Math.floor(sprite.y * CONSTANTS.WORLD.TILE_SIZE * scale * camera.zoom - camera.y);
 
     // Skip if off screen
     if (screenX < -32 || screenX > ctx.canvas.width + 32 ||
@@ -892,113 +912,70 @@ class VillagerRenderer {
       return;
     }
 
-    // Size based on life stage
-    let size = 14;
-    if (sprite.lifeStage === 'Child') size = 10;
-    if (sprite.lifeStage === 'Elder') size = 13;
-    if (sprite.isChieftan) size = 16;
-
-    const drawSize = size * camera.zoom;
-
-    // Draw shadow
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-    ctx.beginPath();
-    ctx.ellipse(screenX, screenY + drawSize * 0.4, drawSize * 0.4, drawSize * 0.15, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Body offset for animation
-    let bobOffset = 0;
-    if (sprite.isMoving) {
-      bobOffset = Math.sin(sprite.animFrame * Math.PI / 2) * 2 * camera.zoom;
+    // LOD: far zoom draws a tribe-colored diamond instead of full sprite
+    if (camera.zoom < 0.65) {
+      const village = (typeof game !== 'undefined' ? game : globalThis.game)?.getVillage?.(villager.villageId);
+      ctx.fillStyle = village?.getColor?.() || '#e94560';
+      ctx.beginPath();
+      ctx.moveTo(screenX, screenY - 3);
+      ctx.lineTo(screenX + 3, screenY);
+      ctx.lineTo(screenX, screenY + 3);
+      ctx.lineTo(screenX - 3, screenY);
+      ctx.closePath();
+      ctx.fill();
+      return;
     }
 
-    // Draw body (simple pixel person)
-    ctx.fillStyle = sprite.skinTone;
+    const clothing = this.getClothingColor(villager);
+    const animState = VillagerSpriteFactory.resolveAnimState(villager, sprite);
+    const parts = {
+      skinTone: sprite.skinTone,
+      hairColor: sprite.hairColor,
+      clothing,
+      lifeStage: sprite.lifeStage,
+      isChieftan: sprite.isChieftan,
+      direction: sprite.direction || 'south',
+      animState,
+      animFrame: sprite.animFrame || 0
+    };
 
-    // Head
-    ctx.fillRect(
-      screenX - drawSize * 0.35 + bobOffset,
-      screenY - drawSize * 0.8,
-      drawSize * 0.7,
-      drawSize * 0.5
+    const spriteCanvas = this.getCachedSprite(parts);
+    let drawSize = 16 * camera.zoom;
+    if (sprite.lifeStage === 'Child') drawSize *= 0.75;
+    if (sprite.lifeStage === 'Elder') drawSize *= 0.95;
+    if (sprite.isChieftan) drawSize *= 1.15;
+
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(
+      spriteCanvas,
+      Math.floor(screenX - drawSize / 2),
+      Math.floor(screenY - drawSize * 0.85),
+      Math.floor(drawSize),
+      Math.floor(drawSize)
     );
 
-    // Body
-    const bodyColor = this.getClothingColor(villager);
-    ctx.fillStyle = bodyColor;
-    ctx.fillRect(
-      screenX - drawSize * 0.4 + bobOffset,
-      screenY - drawSize * 0.3,
-      drawSize * 0.8,
-      drawSize * 0.5
-    );
-
-    // Legs
-    ctx.fillStyle = sprite.skinTone;
-    const legSpread = sprite.isMoving ? Math.sin(sprite.animFrame * Math.PI / 2) * 3 * camera.zoom : 0;
-    ctx.fillRect(
-      screenX - drawSize * 0.3 + bobOffset + legSpread,
-      screenY + drawSize * 0.2,
-      drawSize * 0.25,
-      drawSize * 0.25
-    );
-    ctx.fillRect(
-      screenX - drawSize * 0.05 + bobOffset - legSpread,
-      screenY + drawSize * 0.2,
-      drawSize * 0.25,
-      drawSize * 0.25
-    );
-
-    // Hair
-    ctx.fillStyle = sprite.hairColor;
-    ctx.fillRect(
-      screenX - drawSize * 0.35 + bobOffset,
-      screenY - drawSize * 0.85,
-      drawSize * 0.7,
-      drawSize * 0.15
-    );
-
-    // Chieftan crown/feathers
-    if (sprite.isChieftan) {
-      ctx.fillStyle = '#ffd700';
-      ctx.fillRect(
-        screenX - drawSize * 0.4 + bobOffset,
-        screenY - drawSize * 1.0,
-        drawSize * 0.8,
-        drawSize * 0.15
-      );
-      // Feather plumes
-      ctx.fillStyle = '#ff6b6b';
-      ctx.fillRect(
-        screenX - drawSize * 0.5 + bobOffset,
-        screenY - drawSize * 1.2,
-        drawSize * 0.15,
-        drawSize * 0.3
-      );
-      ctx.fillStyle = '#4ecdc4';
-      ctx.fillRect(
-        screenX - drawSize * 0.1 + bobOffset,
-        screenY - drawSize * 1.2,
-        drawSize * 0.15,
-        drawSize * 0.3
-      );
-      ctx.fillStyle = '#ffe66d';
-      ctx.fillRect(
-        screenX + bobOffset,
-        screenY - drawSize * 1.2,
-        drawSize * 0.15,
-        drawSize * 0.3
+    // Selection / mood rim when selected
+    const host = typeof game !== 'undefined' ? game : globalThis.game;
+    if (host?.selectedVillager === villager) {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(
+        Math.floor(screenX - drawSize / 2) - 1,
+        Math.floor(screenY - drawSize * 0.85) - 1,
+        Math.floor(drawSize) + 2,
+        Math.floor(drawSize) + 2
       );
     }
 
     // Draw speech bubble if present
     if (showSpeechBubbles && villager.speechBubble) {
-      this.renderSpeechBubble(ctx, villager.speechBubble, screenX, screenY - drawSize * 1.3);
+      this.renderSpeechBubble(ctx, villager.speechBubble, screenX, screenY - drawSize * 1.05);
     }
   }
 
   getClothingColor(villager) {
-    const village = game?.getVillage?.(villager.villageId);
+    const host = typeof game !== 'undefined' ? game : globalThis.game;
+    const village = host?.getVillage?.(villager.villageId);
     const tribeTint = village?.getColor?.() || null;
 
     // Base clothing on title/role
@@ -1034,52 +1011,58 @@ class VillagerRenderer {
   }
 
   renderSpeechBubble(ctx, bubble, x, y) {
-    ctx.font = '16px Arial';
+    ctx.font = '14px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
     // Bubble background
     const text = bubble.emoji;
     const metrics = ctx.measureText(text);
-    const width = metrics.width + 20;
-    const height = 28;
+    const width = Math.max(24, metrics.width + 16);
+    const height = 24;
 
-    ctx.fillStyle = 'white';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.strokeStyle = 'rgba(30, 30, 40, 0.8)';
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.roundRect(x - width / 2, y - height / 2, width, height, 8);
+    if (ctx.roundRect) {
+      ctx.roundRect(x - width / 2, y - height / 2, width, height, 4);
+    } else {
+      ctx.rect(x - width / 2, y - height / 2, width, height);
+    }
     ctx.fill();
+    ctx.stroke();
 
     // Bubble pointer
     ctx.beginPath();
     ctx.moveTo(x - 4, y + height / 2);
-    ctx.lineTo(x, y + height / 2 + 8);
+    ctx.lineTo(x, y + height / 2 + 6);
     ctx.lineTo(x + 4, y + height / 2);
     ctx.fill();
 
-    // Emoji
+    // Emoji / icon text
     ctx.fillStyle = '#333';
     ctx.fillText(text, x, y);
   }
 
-  // Render villager label (name)
+  // Render villager label (name) with pixel font
   renderLabel(villager, camera, scale, showLabels = true) {
     if (!showLabels) return;
 
     const ctx = this.ctx;
-    const screenX = villager.x * CONSTANTS.WORLD.TILE_SIZE * scale * camera.zoom - camera.x;
-    const screenY = villager.y * CONSTANTS.WORLD.TILE_SIZE * scale * camera.zoom - camera.y;
+    const screenX = Math.floor(villager.x * CONSTANTS.WORLD.TILE_SIZE * scale * camera.zoom - camera.x);
+    const screenY = Math.floor(villager.y * CONSTANTS.WORLD.TILE_SIZE * scale * camera.zoom - camera.y);
+    const labelY = screenY + Math.floor(18 * camera.zoom);
+    const host = typeof game !== 'undefined' ? game : globalThis.game;
+    const color = villager.isChieftan
+      ? '#ffd700'
+      : (host?.getVillage?.(villager.villageId)?.getColor?.() || '#ffffff');
 
-    const labelY = screenY + 20 * camera.zoom;
-
-    // Background
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.fillRect(screenX - 30, labelY - 8, 60, 14);
-
-    // Text
-    ctx.font = `${10 * camera.zoom}px Arial`;
-    ctx.fillStyle = villager.isChieftan ? '#ffd700' : (game?.getVillage?.(villager.villageId)?.getColor?.() || '#ffffff');
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(villager.name, screenX, labelY);
+    const text = villager.name;
+    const fontScale = Math.max(1, Math.floor(camera.zoom));
+    const width = PixelFont.measure(text, fontScale);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fillRect(screenX - width / 2 - 3, labelY - 2, width + 6, 5 * fontScale + 4);
+    PixelFont.draw(ctx, text, screenX, labelY, { scale: fontScale, color, align: 'center' });
   }
 }

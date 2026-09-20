@@ -832,19 +832,24 @@ class WorldRenderer {
       }
     }
 
-    // Lighting colors for time of day
-    this.lightingColors = {
-      dawn: 'rgba(255, 150, 100, 0.2)',
-      morning: 'rgba(255, 255, 200, 0.1)',
-      afternoon: 'rgba(255, 255, 255, 0.05)',
-      evening: 'rgba(255, 100, 50, 0.25)',
-      night: 'rgba(20, 20, 60, 0.5)'
-    };
+    // Visual subsystems (terrain cache, lighting cutouts, weather particles)
+    this.terrainCache = new TerrainCache();
+    this.lightingLayer = new LightingLayer();
+    this.particleSystem = new ParticleSystem();
+    this.animTime = 0;
+    this.lastParticleTs = 0;
 
     // Cached minimap terrain (tiles, territories, structures, centers)
     this.minimapCache = null;
     this.minimapCacheSize = { width: 0, height: 0 };
     this.minimapCacheShowLabels = null;
+  }
+
+  /** Invalidate terrain + minimap caches after world gen or season change. */
+  invalidateTerrainCache() {
+    this.terrainCache.invalidate();
+    this.minimapCache = null;
+    if (this.world) this.world.minimapDirty = true;
   }
 
   resize() {
@@ -888,21 +893,51 @@ class WorldRenderer {
     return { x, y };
   }
 
-  render(timeOfDay, season, showLabels = true, weather = null) {
+  /**
+   * Main world paint pass.
+   * @param {string} timeOfDay
+   * @param {object} season
+   * @param {boolean} showLabels
+   * @param {object|null} weather
+   * @param {object} graphicsOptions { lighting, particles, animTime }
+   */
+  render(timeOfDay, season, showLabels = true, weather = null, graphicsOptions = {}) {
     const ctx = this.ctx;
+    const lightingEnabled = graphicsOptions.lighting !== false;
+    const particlesEnabled = graphicsOptions.particles !== false;
+    this.animTime = graphicsOptions.animTime ?? this.animTime;
     const scale = this.camera.zoom * CONSTANTS.WORLD.PIXEL_SCALE;
+    const seasonName = season?.name;
 
-    // Clear canvas
-    ctx.fillStyle = '#1a1a2e';
+    // Clear canvas (ocean void beyond map)
+    ctx.fillStyle = '#0d2137';
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-    // Calculate visible tile range
+    // Blit cached terrain (season-remapped biomes + micro-detail)
+    if (this.world) {
+      this.terrainCache.blit(
+        ctx,
+        this.world,
+        this.biomeColors,
+        seasonName,
+        this.camera,
+        CONSTANTS.WORLD.PIXEL_SCALE
+      );
+    }
+
+    // Visible tile range for dynamic overlays
     const startX = Math.floor(this.camera.x / (this.tileSize * scale));
     const startY = Math.floor(this.camera.y / (this.tileSize * scale));
     const endX = Math.ceil((this.camera.x + this.canvas.width) / (this.tileSize * scale));
     const endY = Math.ceil((this.camera.y + this.canvas.height) / (this.tileSize * scale));
 
-    // Render terrain
+    // Animated water shimmer on visible wet tiles only
+    AmbientFX.drawWaterShimmer(
+      ctx, this.world, this.camera, this.tileSize, CONSTANTS.WORLD.PIXEL_SCALE,
+      this.animTime, startX, startY, endX, endY
+    );
+
+    // Dynamic props: resources + structures (not baked into terrain cache)
     for (let y = startY; y <= endY; y++) {
       for (let x = startX; x <= endX; x++) {
         const tile = this.world.getTile(x, y);
@@ -912,90 +947,46 @@ class WorldRenderer {
         const screenY = y * this.tileSize * scale - this.camera.y;
         const tileSize = this.tileSize * scale;
 
-        // Base biome color
-        ctx.fillStyle = this.biomeColors[tile.biome] || '#333';
-        ctx.fillRect(screenX, screenY, tileSize, tileSize);
-
-        // Add texture variation
-        if (tile.biome !== CONSTANTS.BIOME.OCEAN) {
-          const variation = Utils.noise2D(x + this.world.seed, y + this.world.seed) * 0.1;
-          ctx.fillStyle = `rgba(255, 255, 255, ${variation})`;
-          ctx.fillRect(screenX, screenY, tileSize, tileSize);
-        }
-
-        // Draw biome icon on tile (on top of terrain but behind resources/structures for readability)
-        const biomeIcon = CONSTANTS.BIOME_ICON[tile.biome];
-        if (biomeIcon && tileSize >= 8) { // Only draw if tile is visible size
-          ctx.font = `${Math.floor(tileSize * 0.65)}px Arial`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-          ctx.fillText(biomeIcon, screenX + tileSize / 2, screenY + tileSize / 2);
-        }
-
-        // Resource indicators
         const resource = this.world.getResourceAt(x, y);
-        if (resource && !resource.depleted) {
+        if (resource && !resource.depleted && tileSize >= 6) {
           this.renderResourceIndicator(ctx, resource, screenX, screenY, tileSize);
         }
 
-        // Draw structure if present
         const structure = this.world.getStructureAt(x, y);
         if (structure) {
-          this.renderStructure(ctx, structure, screenX, screenY, tileSize);
+          this.renderStructure(ctx, structure, screenX, screenY, tileSize, this.animTime);
         }
-
-        // Grid lines (debug)
-        // ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-        // ctx.strokeRect(screenX, screenY, tileSize, tileSize);
       }
     }
 
-    // Apply lighting overlay based on time of day
-    if (timeOfDay && this.lightingColors[timeOfDay]) {
-      ctx.fillStyle = this.lightingColors[timeOfDay];
+    // Subtle season wash (ground remaps do the heavy lifting)
+    const seasonOverlay = SeasonPalette.overlayColor(season);
+    if (seasonOverlay) {
+      ctx.fillStyle = seasonOverlay;
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     }
 
-    // Season tint
-    if (season) {
-      ctx.fillStyle = `${season.color}15`;
-      ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    }
+    // Day/night lighting with fire cutouts when enabled
+    const fires = (this.world?.structures || []).filter((s) => s.type === 'fire');
+    this.lightingLayer.apply(ctx, {
+      timeOfDay,
+      lightingEnabled,
+      fires,
+      worldToScreen: (wx, wy) => this.worldToScreen(wx, wy),
+      lightRadiusPx: 5 * this.tileSize * scale,
+      width: this.canvas.width,
+      height: this.canvas.height,
+      animTime: this.animTime
+    });
 
-    // Rain weather tint when particles enabled for wet season
-    if (weather?.rain) {
-      ctx.fillStyle = 'rgba(74, 144, 217, 0.12)';
-      ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-      ctx.strokeStyle = 'rgba(180, 210, 240, 0.35)';
-      ctx.lineWidth = 1;
-      const streakCount = 40;
-      for (let i = 0; i < streakCount; i++) {
-        const x = ((i * 97) + (Date.now() / 30) % this.canvas.width) % this.canvas.width;
-        const y = ((i * 53) + (Date.now() / 20)) % this.canvas.height;
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x - 2, y + 10);
-        ctx.stroke();
-      }
-    }
-
-    // Night darkness (apply to areas without fire light)
-    if (timeOfDay === 'night') {
-      // Create radial gradient from fires
-      const fires = this.world.structures.filter(s => s.type === 'fire');
-      fires.forEach(fire => {
-        const screen = this.worldToScreen(fire.x, fire.y);
-        const gradient = ctx.createRadialGradient(
-          screen.x, screen.y, 0,
-          screen.x, screen.y, 5 * this.tileSize * scale
-        );
-        gradient.addColorStop(0, 'rgba(255, 200, 100, 0.3)');
-        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-      });
-    }
+    // Weather particles (rain / dust), capped and toggle-gated
+    const particleMode = ParticleSystem.resolveMode(weather, seasonName, particlesEnabled);
+    this.particleSystem.sync(particleMode, this.canvas.width, this.canvas.height);
+    const now = this.animTime;
+    const dt = this.lastParticleTs ? Math.max(0, now - this.lastParticleTs) : 16;
+    this.lastParticleTs = now;
+    this.particleSystem.update(dt);
+    this.particleSystem.render(ctx);
   }
 
   renderTerritories(villages = [], selectedVillageId = null) {
@@ -1003,16 +994,16 @@ class WorldRenderer {
 
     const ctx = this.ctx;
     const scale = this.tileSize * this.camera.zoom;
-    const territoryColors = ['rgba(78, 204, 163, 0.12)', 'rgba(233, 69, 96, 0.12)'];
+    const territoryColors = ['rgba(78, 204, 163, 0.08)', 'rgba(233, 69, 96, 0.08)'];
 
     villages.forEach((village, idx) => {
       const isSelected = village.id === selectedVillageId;
-      const baseColor = territoryColors[idx] || 'rgba(128, 128, 128, 0.1)';
+      const baseColor = territoryColors[idx] || 'rgba(128, 128, 128, 0.06)';
       const screen = this.worldToScreen(village.center.x, village.center.y);
       const radius = village.territoryRadius * scale;
 
       ctx.save();
-      ctx.fillStyle = isSelected ? baseColor.replace('0.12', '0.22') : baseColor;
+      ctx.fillStyle = isSelected ? baseColor.replace(/0\.0\d+/, '0.16') : baseColor;
       ctx.beginPath();
       ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
       ctx.fill();
@@ -1025,52 +1016,38 @@ class WorldRenderer {
       ctx.stroke();
 
       if (this.camera.zoom >= 0.5) {
-        ctx.font = `bold ${Math.max(10, 12 * this.camera.zoom)}px Courier New, monospace`;
-        ctx.fillStyle = village.getColor();
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(village.name, screen.x, screen.y - radius - 4);
+        PixelFont.draw(ctx, village.name, screen.x, screen.y - radius - 10, {
+          scale: Math.max(1, Math.floor(this.camera.zoom)),
+          color: village.getColor(),
+          align: 'center'
+        });
       }
       ctx.restore();
     });
   }
 
   renderResourceIndicator(ctx, resource, screenX, screenY, tileSize) {
-    const iconSize = tileSize * 0.6;
-    const offsetX = (tileSize - iconSize) / 2;
-    const offsetY = (tileSize - iconSize) / 2;
-
-    ctx.globalAlpha = 0.7;
-
-    // Draw resource icon based on type
-    ctx.font = `${iconSize}px Arial`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    const icons = {
-      [CONSTANTS.RESOURCE.WOOD]: '🪵',
-      [CONSTANTS.RESOURCE.FOOD]: '🍎',
-      [CONSTANTS.RESOURCE.WATER]: '💧',
-      [CONSTANTS.RESOURCE.STONE]: '🪨',
-      [CONSTANTS.RESOURCE.HERBS]: '🌿',
-      [CONSTANTS.RESOURCE.CLAY]: '🏺',
-      [CONSTANTS.RESOURCE.FISH]: '🐟',
-      [CONSTANTS.RESOURCE.THATCH]: '🌾',
-      [CONSTANTS.RESOURCE.RARE_MATERIALS]: '💎'
-    };
-
-    ctx.fillText(icons[resource.type] || '?', screenX + tileSize / 2, screenY + tileSize / 2);
-
+    const iconSize = tileSize * 0.55;
+    ctx.globalAlpha = 0.85;
+    PixelIcons.drawResource(
+      ctx,
+      resource.type,
+      screenX + tileSize / 2,
+      screenY + tileSize / 2,
+      iconSize
+    );
     ctx.globalAlpha = 1;
 
-    // Depletion indicator
+    // Depletion indicator bar
     if (resource.amount < resource.maxAmount * 0.3) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+      ctx.fillRect(screenX, screenY + tileSize - 4, tileSize, 4);
+      ctx.fillStyle = '#e94560';
       ctx.fillRect(screenX, screenY + tileSize - 4, tileSize * (resource.amount / resource.maxAmount), 4);
     }
   }
 
-  renderStructure(ctx, structure, screenX, screenY, tileSize) {
+  renderStructure(ctx, structure, screenX, screenY, tileSize, animTime = 0) {
     const colors = {
       hut: '#8b5a2b',
       storage: '#b7833b',
@@ -1081,21 +1058,12 @@ class WorldRenderer {
       workshop: '#6c6f75',
       shrine: '#6b5bd2'
     };
-    const labels = {
-      hut: 'H',
-      storage: 'S',
-      fire: 'F',
-      watchtower: 'W',
-      well: 'O',
-      farm: 'P',
-      workshop: 'T',
-      shrine: '*'
-    };
     const pad = tileSize * 0.14;
     const cx = screenX + tileSize / 2;
     const cy = screenY + tileSize / 2;
 
     ctx.save();
+    // Ground shadow under every structure
     ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
     ctx.fillRect(screenX + tileSize * 0.18, screenY + tileSize * 0.72, tileSize * 0.64, tileSize * 0.12);
     ctx.fillStyle = colors[structure.type] || '#d9c27d';
@@ -1112,6 +1080,9 @@ class WorldRenderer {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
+      // Door
+      ctx.fillStyle = '#3e2723';
+      ctx.fillRect(cx - tileSize * 0.08, cy + tileSize * 0.08, tileSize * 0.16, tileSize * 0.2);
     } else if (structure.type === 'fire') {
       ctx.beginPath();
       ctx.moveTo(cx, screenY + pad);
@@ -1124,6 +1095,7 @@ class WorldRenderer {
       ctx.beginPath();
       ctx.arc(cx, cy + tileSize * 0.22, tileSize * 0.16, 0, Math.PI * 2);
       ctx.fill();
+      AmbientFX.drawFireSmoke(ctx, cx, screenY + pad, tileSize, animTime, structure.x + structure.y);
     } else if (structure.type === 'well') {
       ctx.beginPath();
       ctx.ellipse(cx, cy, tileSize * 0.28, tileSize * 0.22, 0, 0, Math.PI * 2);
@@ -1133,6 +1105,17 @@ class WorldRenderer {
       ctx.beginPath();
       ctx.ellipse(cx, cy, tileSize * 0.16, tileSize * 0.1, 0, 0, Math.PI * 2);
       ctx.fill();
+      // Well posts + roof
+      ctx.strokeStyle = '#5d4037';
+      ctx.beginPath();
+      ctx.moveTo(cx - tileSize * 0.28, cy);
+      ctx.lineTo(cx - tileSize * 0.28, screenY + pad);
+      ctx.moveTo(cx + tileSize * 0.28, cy);
+      ctx.lineTo(cx + tileSize * 0.28, screenY + pad);
+      ctx.stroke();
+      ctx.fillStyle = '#8d6e63';
+      ctx.fillRect(cx - tileSize * 0.32, screenY + pad, tileSize * 0.64, tileSize * 0.1);
+      AmbientFX.drawWellRipple(ctx, cx, cy, tileSize, animTime);
     } else if (structure.type === 'farm') {
       ctx.fillRect(screenX + pad, screenY + pad, tileSize - pad * 2, tileSize - pad * 2);
       ctx.strokeRect(screenX + pad, screenY + pad, tileSize - pad * 2, tileSize - pad * 2);
@@ -1144,37 +1127,58 @@ class WorldRenderer {
         ctx.lineTo(screenX + tileSize - pad * 1.4, y);
         ctx.stroke();
       }
+      // Crop dots for growth feel
+      ctx.fillStyle = '#9ccc65';
+      for (let i = 0; i < 6; i++) {
+        const px = screenX + pad * 1.6 + (i % 3) * tileSize * 0.22;
+        const py = screenY + pad * 1.8 + Math.floor(i / 3) * tileSize * 0.28;
+        ctx.fillRect(px, py, tileSize * 0.08, tileSize * 0.08);
+      }
+    } else if (structure.type === 'storage') {
+      ctx.fillRect(screenX + pad, screenY + pad * 1.4, tileSize - pad * 2, tileSize - pad * 2.2);
+      ctx.strokeRect(screenX + pad, screenY + pad * 1.4, tileSize - pad * 2, tileSize - pad * 2.2);
+      ctx.beginPath();
+      ctx.moveTo(screenX + pad * 0.6, screenY + pad * 1.5);
+      ctx.lineTo(cx, screenY + pad * 0.4);
+      ctx.lineTo(screenX + tileSize - pad * 0.6, screenY + pad * 1.5);
+      ctx.closePath();
+      ctx.fillStyle = '#a0673a';
+      ctx.fill();
+      ctx.stroke();
+    } else if (structure.type === 'watchtower') {
+      ctx.fillRect(cx - tileSize * 0.16, screenY + pad * 1.2, tileSize * 0.32, tileSize * 0.6);
+      ctx.strokeRect(cx - tileSize * 0.16, screenY + pad * 1.2, tileSize * 0.32, tileSize * 0.6);
+      ctx.fillStyle = '#5d4037';
+      ctx.fillRect(cx - tileSize * 0.28, screenY + pad, tileSize * 0.56, tileSize * 0.22);
+      ctx.fillStyle = '#c62828';
+      ctx.fillRect(cx + tileSize * 0.18, screenY + pad * 0.5, tileSize * 0.06, tileSize * 0.35);
+    } else if (structure.type === 'workshop') {
+      ctx.fillRect(screenX + pad, screenY + pad * 1.2, tileSize - pad * 2, tileSize - pad * 2);
+      ctx.strokeRect(screenX + pad, screenY + pad * 1.2, tileSize - pad * 2, tileSize - pad * 2);
+      ctx.fillStyle = '#455a64';
+      ctx.fillRect(cx - tileSize * 0.2, cy, tileSize * 0.4, tileSize * 0.18);
+      ctx.fillStyle = '#ffb300';
+      ctx.fillRect(cx + tileSize * 0.15, screenY + pad * 1.4, tileSize * 0.12, tileSize * 0.12);
+    } else if (structure.type === 'shrine') {
+      ctx.beginPath();
+      ctx.moveTo(cx, screenY + pad);
+      ctx.lineTo(screenX + tileSize - pad, cy + tileSize * 0.1);
+      ctx.lineTo(screenX + pad, cy + tileSize * 0.1);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#ede7f6';
+      ctx.fillRect(cx - tileSize * 0.08, cy, tileSize * 0.16, tileSize * 0.28);
+      ctx.fillStyle = '#ffd54f';
+      ctx.beginPath();
+      ctx.arc(cx, cy - tileSize * 0.05, tileSize * 0.08, 0, Math.PI * 2);
+      ctx.fill();
     } else {
       ctx.fillRect(screenX + pad, screenY + pad, tileSize - pad * 2, tileSize - pad * 2);
       ctx.strokeRect(screenX + pad, screenY + pad, tileSize - pad * 2, tileSize - pad * 2);
-      ctx.fillStyle = '#fff8dc';
-      ctx.font = `${Math.max(8, tileSize * 0.38)}px Arial`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(labels[structure.type] || '?', cx, cy);
     }
 
     ctx.restore();
-    return;
-
-    const scale = this.tileSize * 0.8;
-
-    ctx.font = `${scale}px Arial`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    const icons = {
-      hut: '🏠',
-      storage: '📦',
-      fire: '🔥',
-      watchtower: '🗼',
-      well: '🪣',
-      farm: '🌾',
-      workshop: '🔧',
-      shrine: '⛩️'
-    };
-
-    ctx.fillText(icons[structure.type] || '❓', screenX + tileSize / 2, screenY + tileSize / 2);
   }
 
   renderConstructionProject(project) {
