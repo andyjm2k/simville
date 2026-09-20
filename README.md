@@ -2,6 +2,14 @@
 
 A simulated island world where LLMs drive village actions and the island grows and evolves as the village prospers — an experiment in local LLMs driving complex ecosystem simulations in a gaming environment.
 
+## Docs
+
+| Doc | Purpose |
+|-----|---------|
+| [`SPEC.md`](./SPEC.md) | Product / systems specification |
+| [`SOCIAL_DYNAMICS_PLAN.md`](./SOCIAL_DYNAMICS_PLAN.md) | Phased plan & spec for villager inter/intra social dynamics |
+| [`REFACTOR_PLAN.md`](./REFACTOR_PLAN.md) | Historical refactor phases |
+
 ## Visual simulation
 
 The world view is **HTML5 Canvas 2D** (Electron). Recent polish focuses on engagement without WebGL:
