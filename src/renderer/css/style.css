@@ -7,7 +7,7 @@
 }
 
 :root {
-  --bg-dark: #1a1a2e;
+  --bg-dark: #12122a;
   --bg-panel: #16213e;
   --bg-input: #0f3460;
   --text-primary: #e8e8e8;
@@ -18,6 +18,7 @@
   --warning: #ffc107;
   --border-color: #3a3a5c;
   --pixel-scale: 2;
+  --hud-glow: rgba(78, 204, 163, 0.12);
 }
 
 /* Disable image smoothing for pixel art feel */
@@ -45,7 +46,9 @@ body {
 /* ===== HUD ===== */
 #hud {
   height: 40px;
-  background: linear-gradient(180deg, rgba(22, 33, 62, 0.95) 0%, rgba(22, 33, 62, 0.8) 100%);
+  background:
+    linear-gradient(90deg, var(--hud-glow), transparent 35%),
+    linear-gradient(180deg, rgba(22, 33, 62, 0.96) 0%, rgba(18, 26, 48, 0.9) 100%);
   border-bottom: 2px solid var(--border-color);
   display: flex;
   align-items: center;

@@ -5,13 +5,22 @@ import { vi } from 'vitest';
 
 const noop = () => {};
 
+function createGradientMock() {
+  return {
+    addColorStop: noop
+  };
+}
+
 const canvasContextMock = {
   fillStyle: '',
   strokeStyle: '',
   lineWidth: 1,
   font: '10px sans-serif',
   textAlign: 'left',
+  textBaseline: 'alphabetic',
   globalAlpha: 1,
+  globalCompositeOperation: 'source-over',
+  imageSmoothingEnabled: true,
   fillRect: noop,
   strokeRect: noop,
   clearRect: noop,
@@ -20,6 +29,9 @@ const canvasContextMock = {
   moveTo: noop,
   lineTo: noop,
   arc: noop,
+  ellipse: noop,
+  rect: noop,
+  roundRect: noop,
   fill: noop,
   stroke: noop,
   fillText: noop,
@@ -31,10 +43,19 @@ const canvasContextMock = {
   scale: noop,
   rotate: noop,
   setTransform: noop,
-  measureText: () => ({ width: 0 })
+  setLineDash: noop,
+  clip: noop,
+  measureText: () => ({ width: 10 }),
+  createRadialGradient: () => createGradientMock(),
+  createLinearGradient: () => createGradientMock(),
+  getImageData: () => ({ data: new Uint8ClampedArray(4), width: 1, height: 1 }),
+  putImageData: noop
 };
 
-HTMLCanvasElement.prototype.getContext = vi.fn(() => canvasContextMock);
+HTMLCanvasElement.prototype.getContext = vi.fn(() => {
+  // Return a fresh mutable mock so tests can spy on draw calls
+  return { ...canvasContextMock, canvas: { width: 1280, height: 720 } };
+});
 
 if (!globalThis.requestAnimationFrame) {
   globalThis.requestAnimationFrame = (callback) => setTimeout(() => callback(Date.now()), 16);

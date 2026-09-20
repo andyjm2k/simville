@@ -1119,7 +1119,7 @@ class Game {
     this.world = new World(64);
     this.world.generate();
     this.worldRenderer.world = this.world;
-    this.worldRenderer.minimapCache = null;
+    this.worldRenderer.invalidateTerrainCache();
     this.worldRenderer.camera.zoom = 1;
     this.selectedVillager = null;
     this.cameraTarget = null;
@@ -1740,12 +1740,19 @@ class Game {
     }
 
     this.updateWeatherForSeason(newSeason);
+    this.worldRenderer?.invalidateTerrainCache?.();
   }
 
   updateWeatherForSeason(season = this.timeState.season) {
-    const isRainSeason = season?.name === CONSTANTS.SEASON.WET.name;
+    const seasonName = season?.name;
+    const particlesOn = this.graphicsSettings?.particles !== false;
+    const isRainSeason = seasonName === CONSTANTS.SEASON.WET.name;
+    const isDustSeason =
+      seasonName === CONSTANTS.SEASON.DRY.name ||
+      seasonName === CONSTANTS.SEASON.DEEP_DRY.name;
     this.weather = {
-      rain: Boolean(isRainSeason && this.graphicsSettings?.particles)
+      rain: Boolean(isRainSeason && particlesOn),
+      dust: Boolean(isDustSeason && particlesOn)
     };
   }
 
@@ -5142,7 +5149,12 @@ Respond with JSON: {
       timeOfDay,
       this.timeState.season,
       this.graphicsSettings.showLabels,
-      this.weather
+      this.weather,
+      {
+        lighting: this.graphicsSettings.lighting !== false,
+        particles: this.graphicsSettings.particles !== false,
+        animTime: performance.now()
+      }
     );
 
     // Render territory overlays for each tribe
@@ -5220,7 +5232,7 @@ Respond with JSON: {
       // Restore world
       this.world = World.deserialize(saveData.world);
       this.worldRenderer.world = this.world;
-      this.worldRenderer.minimapCache = null;
+      this.worldRenderer.invalidateTerrainCache();
       this.worldRenderer.camera.zoom = 1;
       this.selectedVillager = null;
       this.cameraTarget = null;

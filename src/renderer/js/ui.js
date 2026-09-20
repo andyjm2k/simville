@@ -999,6 +999,16 @@ class UIManager {
     // Update LLM manager
     llm.updateConfig(config);
 
+    // Apply graphics toggles to the live simulation immediately
+    if (window.game) {
+      window.game.graphicsSettings = {
+        ...window.game.graphicsSettings,
+        ...config.graphics
+      };
+      window.game.updateWeatherForSeason?.();
+      window.game.worldRenderer?.invalidateTerrainCache?.();
+    }
+
     this.closePanel('settings-panel');
     this.showToast('Settings saved!');
   }

@@ -176,7 +176,8 @@ Duplicate names break bonds; conquest cleanup uses substring match on village na
 ### 3.3 Seasons (SPEC §14 / §20.8) — Mostly cosmetic
 
 Present: tint, moodMod, some farm/well/regrow multipliers.  
-Missing: rain particles, floods, wildfire, disease, irrigation, seasonal planning, festival trigger. Graphics toggles for particles/lighting largely unwired.
+Missing: floods, wildfire, disease, irrigation, seasonal planning, festival trigger.
+Rain/dust particles and lighting toggles are wired (`ParticleSystem`, `LightingLayer`).
 
 ### 3.4 Personal goals (SPEC §16) — Medium
 
@@ -198,11 +199,18 @@ Detail pane lacks Talk / Assign Task / View. Settings lack audio, end date, init
 
 Large `constants` + LLM research path; `hasTech()` never gates production/build. Either wire unlocks or quarantine as future (SPEC §22 lists tech as future enhancement — current code overclaims).
 
-### 3.9 Presentation / audio — Placeholder
+### 3.9 Presentation / audio — Partially improved
 
-- Spec file structure lists `audio.js`, sprites, fonts — **absent**.
-- Rendering: colored rects + emoji/Arial, not pixel sprites (SPEC §7).
-- Dead code: unreachable structure emoji branch in `world.js` after early `return`.
+- Spec file structure lists `audio.js` and shipped sprite PNGs — **still absent** (audio untouched).
+- Rendering upgraded toward SPEC §7 without a full atlas:
+  - Offscreen **terrain cache** with season-remapped biome colors + micro-detail (`TerrainCache`)
+  - **Lighting toggle** wired; night darkness uses fire **cutouts** then warm glow (`LightingLayer`)
+  - **Particle** rain/dust pools gated by settings (`ParticleSystem`)
+  - Procedural **cached villager sprites** with idle/walk/work/sleep (`VillagerSpriteFactory`)
+  - Pixel **bitmap font** + procedural resource icons; biome emoji tile overlays removed
+  - Structure silhouettes expanded (storage, watchtower, workshop, shrine) + activity FX
+- Dead unreachable structure-emoji branch in `world.js` removed.
+- Full 16-bit sprite sheet atlas remains deferred (see Phase priorities).
 
 ### 3.10 Save/load (SPEC §11) — Gaps
 
@@ -215,8 +223,8 @@ Not persisted: `Game.resources`, `Game.government`, `nextChieftanDecision`, `hos
 | Hot path | Issue | Direction |
 |----------|-------|-----------|
 | `World.getPath` | BFS with `queue.shift()` → O(n²) | Deque / A* + heap; radius limit; cache |
-| Visible tile render | Linear `getResourceAt` / `getStructureAt` per tile | Occupancy grids / spatial hash |
-| Minimap | Full O(size²) every draw | Dirty buffer + entity overlay |
+| Visible tile render | Dynamic props only; terrain atlas cached | Done via `TerrainCache` + occupancy grids |
+| Minimap | Full O(size²) every draw | Dirty buffer + entity overlay (implemented) |
 | Daily relationship deepen / rituals | O(n²) nested loops | Acceptable at n≈10; partition by village as n grows |
 | Chronicle UI | Rebuild DOM every frame while open | Dirty flag / interval |
 | `game.js` monolith | ~146 methods, all systems | Extract modules (below) |

@@ -75,6 +75,19 @@ Covers:
 - Data transformation (Plotly, matplotlib, CSV)
 - HeatmapGenerator (resource efficiency, performance metrics)
 
+## Visual / Renderer Tests (`tests/unit/visual-fx.test.js`)
+
+**Tests:** 17 | **Status:** ✓ Passing
+
+Covers:
+- `SeasonPalette` color remaps and overlays
+- `LightingLayer` lighting toggle, dawn wash, night cutout compositing
+- `ParticleSystem` mode resolution, capped pools, rain/dust update/render
+- `TerrainCache` rebuild keys, invalidate, blit
+- `PixelFont` / `PixelIcons` / `VillagerSpriteFactory` pose resolution and caching
+- `WorldRenderer` integration with graphics options
+- `VillagerRenderer` sprite cache + low-zoom LOD
+
 ## Running Tests
 
 ### Run All Tests
