@@ -868,17 +868,20 @@ simville/
 │   │   ├── css/
 │   │   │   └── style.css         # UI styling
 │   │   ├── js/
-│   │   │   ├── game.js          # Main game loop
-│   │   │   ├── world.js         # World generation & rendering
-│   │   │   ├── villager.js      # Villager class & AI
-│   │   │   ├── ui.js            # UI management
-│   │   │   ├── llm.js           # LLM API integration
-│   │   │   ├── audio.js        # Audio management
-│   │   │   └── utils.js         # Utility functions
-│   │   └── assets/
-│   │       ├── sprites/         # Pixel art sprites
-│   │       ├── fonts/            # Pixel font
-│   │       └── sounds/           # Audio files
+│   │   │   ├── game.js           # Main game loop
+│   │   │   ├── visual-fx.js      # Terrain cache, lighting cutouts, particles, ambient FX
+│   │   │   ├── pixel-art.js      # Bitmap font, resource icons, villager sprite factory
+│   │   │   ├── world.js          # World generation & rendering
+│   │   │   ├── village.js        # Village entity
+│   │   │   ├── villager.js       # Villager AI & sprite rendering
+│   │   │   ├── ui.js             # UI management
+│   │   │   ├── llm.js            # LLM API integration
+│   │   │   ├── utils.js          # Utility functions
+│   │   │   └── systems/          # Economy, raids, diplomacy, exploration, benchmarks
+│   │   └── assets/ (optional future)
+│   │       ├── sprites/          # Pixel art sprite atlas (deferred)
+│   │       ├── fonts/            # External pixel fonts (canvas bitmap font in pixel-art.js)
+│   │       └── sounds/           # Audio files (audio.js still deferred)
 │   └── shared/
 │       └── constants.js         # Shared constants
 ├── saves/                        # Save files directory
