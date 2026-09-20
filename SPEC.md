@@ -1031,6 +1031,9 @@ Each village is an independent entity with:
 | +30 to +69 | Friendly |
 | +70 to +100 | Allied |
 
+**Folk diplomacy:** Strong cross-tribe personal friendships slowly raise village relations; entrenched personal rivals slowly lower them (clamped daily drift; cannot alone force war or alliance). Hostile village scores apply friction to personal deepen. First peaceful cross-tribe contact initializes personal priors below 0. See `SOCIAL_DYNAMICS_PLAN.md` Phase 5.
+
+**Conquest memory:** Absorbing a village retains personal relationship keys with trauma bias and possible grudges instead of wiping history.
 ### 21.3 Diplomacy Actions
 
 Chieftans can choose these actions via LLM:

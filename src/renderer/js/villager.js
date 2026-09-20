@@ -34,8 +34,8 @@ class Villager {
     this.activityDuration = data.activityDuration || 0;
     this.socialPartnerId = data.socialPartnerId || null;
 
-    // Relationships (keyed by villager id; name keys migrated on access)
-    this.relationships = data.relationships || {}; // { villagerId: score }
+    // Relationships are directed: relationships[otherId] = how I feel about them (-100…100)
+    this.relationships = data.relationships || {};
     this.partnerId = data.partnerId || null;
     this.partnerName = data.partnerName || null;
     this.parentIds = data.parentIds || [];
@@ -46,6 +46,14 @@ class Villager {
     this.lastChildDay = data.lastChildDay || 0;
     this.lastPartnershipDay = data.lastPartnershipDay || 0;
     this.affairPartnerId = data.affairPartnerId || null;
+    // Day of last meaningful social contact per other villager id (Phase 1)
+    this.lastSocialContact = data.lastSocialContact || {};
+    // Soft status score for social goals / partner preference (Phase 6)
+    this.prestige = data.prestige ?? null;
+    // Ephemeral clique id recomputed daily (Phase 6)
+    this.cliqueId = data.cliqueId || null;
+    // Map of otherId → day when conquest trauma was applied (Phase 5)
+    this.warTraumaTargets = data.warTraumaTargets || {};
 
     // Life stage / aging
     this.lifeStage = Utils.getLifeStage(this.age);
@@ -56,6 +64,12 @@ class Villager {
     this.isChieftan = data.isChieftan || false;
     this.title = data.title || this.determineTitle();
     this.villageId = data.villageId || null;
+    // Fill prestige from role when missing (legacy saves)
+    if (this.prestige == null) {
+      this.prestige = typeof SocialSystem !== 'undefined'
+        ? SocialSystem.defaultPrestige(this)
+        : (this.isChieftan ? 60 : 25);
+    }
 
     // Backstory
     this.backstory = data.backstory || '';
@@ -575,11 +589,8 @@ class Villager {
       mood -= isolation * 1.15 * sociableFactor;
     }
 
-    // Relationship average
-    if (Object.keys(this.relationships).length > 0) {
-      const relAvg = Object.values(this.relationships).reduce((a, b) => a + b, 0) / Object.values(this.relationships).length;
-      mood += relAvg * 0.1;
-    }
+    // Relationship contribution: top-K positives + rival/enemy average (Phase 4)
+    mood += this.computeRelationshipMoodContribution();
 
     // Personality modifier
     if (this.personality.confident > 70) mood += 5;
@@ -596,6 +607,47 @@ class Villager {
     }
 
     this.mood = Utils.clamp(Math.round(mood), -100, 100);
+  }
+
+  /**
+   * Mood from strong bonds (top K) and rivals/enemies — not flat average of all.
+   * @returns {number}
+   */
+  computeRelationshipMoodContribution() {
+    const scores = Object.values(this.relationships || {});
+    if (scores.length === 0) return 0;
+
+    const R = CONSTANTS.RELATIONSHIP || {};
+    const k = R.MOOD_REL_TOP_K ?? 3;
+    const posW = R.MOOD_REL_POS_WEIGHT ?? 0.12;
+    const negW = R.MOOD_REL_NEG_WEIGHT ?? 0.15;
+    const rivalThresh = R.RIVAL_THRESHOLD ?? -25;
+    const weights = [0.5, 0.3, 0.2];
+
+    const sorted = scores.slice().sort((a, b) => b - a);
+    const top = sorted.slice(0, k);
+    let positive = 0;
+    top.forEach((score, i) => {
+      positive += score * (weights[i] ?? 0.1);
+    });
+
+    const negatives = scores.filter(s => s <= rivalThresh);
+    const negativeAvg = negatives.length
+      ? negatives.reduce((a, b) => a + b, 0) / negatives.length
+      : 0;
+
+    return positive * posW + negativeAvg * negW;
+  }
+
+  /**
+   * Record meaningful social contact with another villager.
+   * @param {string} otherId
+   * @param {number} day
+   */
+  recordSocialContact(otherId, day) {
+    if (!otherId) return;
+    if (!this.lastSocialContact) this.lastSocialContact = {};
+    this.lastSocialContact[otherId] = day;
   }
 
   moveTo(x, y, world, options = {}) {
@@ -704,6 +756,7 @@ class Villager {
   }
 
   modifyRelationship(targetNameOrId, delta) {
+    // Directed: updates how THIS villager feels about the target
     const other = typeof targetNameOrId === 'object'
       ? targetNameOrId
       : game?.villagers?.find(v => v.id === targetNameOrId || v.name === targetNameOrId);
@@ -847,6 +900,10 @@ class Villager {
       lastChildDay: this.lastChildDay,
       lastPartnershipDay: this.lastPartnershipDay,
       affairPartnerId: this.affairPartnerId,
+      lastSocialContact: this.lastSocialContact,
+      prestige: this.prestige,
+      cliqueId: this.cliqueId,
+      warTraumaTargets: this.warTraumaTargets,
       isChieftan: this.isChieftan,
       title: this.title,
       villageId: this.villageId,

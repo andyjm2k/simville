@@ -495,7 +495,13 @@ class UIManager {
       secrets.slice(0, 3).forEach(secret => {
         const li = document.createElement('li');
         li.className = 'secret-item';
-        li.textContent = secret.revealed ? secret.description : '??? Hidden secret ???';
+        if (!secret.revealed) {
+          li.textContent = '??? Hidden secret ???';
+        } else if (secret.publicKnowledge) {
+          li.textContent = `📢 Public: ${secret.description}`;
+        } else {
+          li.textContent = secret.description;
+        }
         this.elements.villagerSecretsList.appendChild(li);
       });
     }
@@ -522,9 +528,17 @@ class UIManager {
       .slice(0, 3)
       .map(([key, score]) => {
         const name = villager.getRelationshipDisplayName?.(key) || key;
+        const other = game?.villagers?.find(v => v.id === key || v.name === key);
+        const reverse = other ? other.getRelationship(villager) : null;
+        const asymThresh = CONSTANTS.RELATIONSHIP?.ASYM_UI_THRESHOLD ?? 8;
+        if (reverse != null && Math.abs(score - reverse) >= asymThresh) {
+          return `${name}: you→${villager.getRelationshipType(score)} (${Math.round(score)}), they→${villager.getRelationshipType(reverse)} (${Math.round(reverse)})`;
+        }
         return `${name}: ${villager.getRelationshipType(score)} (${Math.round(score)})`;
       });
     if (closeBonds.length) items.push(`Closest bonds: ${closeBonds.join(', ')}`);
+    if (villager.prestige != null) items.push(`Prestige: ${Math.round(villager.prestige)}`);
+    if (villager.cliqueId) items.push(`Clique: ${villager.cliqueId}`);
 
     if (items.length === 0) {
       const li = document.createElement('li');

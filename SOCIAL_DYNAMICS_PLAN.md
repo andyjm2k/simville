@@ -1,9 +1,11 @@
 # Social Relationship Dynamics — Implementation Plan & Spec
 
-**Status:** Planning (not yet implemented)  
+**Status:** Implemented (phases 1–6)  
 **Branch prefix:** `cursor/social-dynamics-*`  
-**Depends on:** Current relationship / gossip / diplomacy systems in `game.js`, `villager.js`, `village.js`, `constants.js`, `systems/diplomacy.js`  
+**Depends on:** Current relationship / gossip / diplomacy systems in `game.js`, `villager.js`, `village.js`, `constants.js`, `systems/diplomacy.js`, `systems/social.js`, `systems/social-community.js`  
 **Related docs:** `SPEC.md` §4.4, §5.1, §13, §16, §21; prior review of intra- and inter-village social logic
+
+> **Implementation note:** Core logic lives in `SocialSystem` (`systems/social.js` + `systems/social-community.js`). Game orchestrates via `ensureVillageSystems()` and daily/social hooks.
 
 This document is the **implementation plan and behavioral spec** for deepening villager social dynamics. Work proceeds in six phases in the order below. Each phase is shippable on its own: merge only when that phase’s acceptance criteria and tests pass.
 
