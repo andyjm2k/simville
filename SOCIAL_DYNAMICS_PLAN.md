@@ -555,25 +555,25 @@ Avoid returning to “everyone Friends” (Phase 1 success metric: Friend+ share
 
 Use this as the execution backlog:
 
-- [ ] **P1** Constants + `lastSocialContact` + neglect drift + friend passive cap  
-- [ ] **P1** Typed `INTERACTION_DELTA` in `applySocialVillagerAction`  
-- [ ] **P1** Tests + balance smoke  
-- [ ] **P2** Directed mutation API; convert jealousy/secrets/romance  
-- [ ] **P2** UI + LLM dual-perspective relationships  
-- [ ] **P2** Tests for asymmetry + marriage mutual gate  
-- [ ] **P3** Gossip opinion table + empathy suppression  
-- [ ] **P3** `publicKnowledge` threshold + chronicle shock  
-- [ ] **P3** Secrets unit/QA updates  
-- [ ] **P4** `findSocialPartner` utility weights  
-- [ ] **P4** Mood top-K + enemy weighting  
-- [ ] **P4** Conflict-seeking argue bias  
-- [ ] **P5** Folk diplomacy drift + cross-tribe prior  
-- [ ] **P5** Conquest trauma memory + romance cooldown  
-- [ ] **P5** Wire validated `generateRelationChanges`  
-- [ ] **P6** Ritual skip shame + funeral socialGain  
-- [ ] **P6** Clique clustering + deepen modifiers  
-- [ ] **P6** Prestige + social goal completion  
-- [ ] Final: update `SPEC.md` acceptance checkboxes; archive this plan’s phases as Done
+- [x] **P1** Constants + `lastSocialContact` + neglect drift + friend passive cap  
+- [x] **P1** Typed `INTERACTION_DELTA` in `applySocialVillagerAction`  
+- [x] **P1** Tests + balance smoke  
+- [x] **P2** Directed mutation API; convert jealousy/secrets/romance  
+- [x] **P2** UI + LLM dual-perspective relationships  
+- [x] **P2** Tests for asymmetry + marriage mutual gate  
+- [x] **P3** Gossip opinion table + empathy suppression  
+- [x] **P3** `publicKnowledge` threshold + chronicle shock  
+- [x] **P3** Secrets unit/QA updates  
+- [x] **P4** `findSocialPartner` utility weights  
+- [x] **P4** Mood top-K + enemy weighting  
+- [x] **P4** Conflict-seeking argue bias  
+- [x] **P5** Folk diplomacy drift + cross-tribe prior  
+- [x] **P5** Conquest trauma memory + romance cooldown  
+- [x] **P5** Wire validated `generateRelationChanges`  
+- [x] **P6** Ritual skip shame + funeral socialGain  
+- [x] **P6** Clique clustering + deepen modifiers  
+- [x] **P6** Prestige + social goal completion  
+- [x] Final: update `SPEC.md` acceptance checkboxes; archive this plan’s phases as Done
 
 ---
 
