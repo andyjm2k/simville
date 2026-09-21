@@ -59,6 +59,9 @@ class Village {
     this.scoutAttempts = data.scoutAttempts || 0;
     // Trade-track partners with mutual open borders (not opened by first contact alone)
     this.tradePartners = data.tradePartners || [];
+
+    // Shared tribal place map (scout debriefs, gossip, home landmarks)
+    this.tribalMap = Array.isArray(data.tribalMap) ? data.tribalMap : [];
   }
 
   createDefaultChronicle() {
@@ -241,8 +244,30 @@ class Village {
       knownVillages: [...(this.knownVillages || [])],
       lastScoutDay: this.lastScoutDay || 0,
       scoutAttempts: this.scoutAttempts || 0,
-      tradePartners: [...(this.tradePartners || [])]
+      tradePartners: [...(this.tradePartners || [])],
+      tribalMap: [...(this.tribalMap || [])]
     };
+  }
+
+  /**
+   * Merge place entries into the tribal map via PlaceMemorySystem when available.
+   * @param {object[]} entries
+   * @param {string} source
+   * @returns {{ added: number, updated: number }}
+   */
+  mergeTribalMap(entries, source = 'scout') {
+    if (typeof game !== 'undefined' && game?.placeMemory) {
+      return game.placeMemory.mergeIntoTribal(this, entries, source);
+    }
+    if (!Array.isArray(this.tribalMap)) this.tribalMap = [];
+    let added = 0;
+    for (const entry of entries || []) {
+      if (!entry?.id) continue;
+      if (this.tribalMap.some(e => e.id === entry.id)) continue;
+      this.tribalMap.push(entry);
+      added += 1;
+    }
+    return { added, updated: 0 };
   }
 
   static deserialize(data) {

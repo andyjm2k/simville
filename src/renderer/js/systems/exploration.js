@@ -277,6 +277,7 @@ class ExplorationSystem {
       if (!villager.isScouting) continue;
 
       this.markExploredAround(villager.x, villager.y);
+      this.game.placeMemory?.observeSurroundings?.(villager);
 
       const mission = villager.scoutMission || {};
       const dest = mission.destination;
@@ -290,6 +291,7 @@ class ExplorationSystem {
       }
 
       if (mission.phase === 'returning' && atDest) {
+        this.debriefScout(villager);
         this.clearScout(villager);
         continue;
       }
@@ -303,6 +305,34 @@ class ExplorationSystem {
         }
         this.sendScoutHome(villager);
       }
+    }
+  }
+
+  /**
+   * Merge a returning scout's personal finds into the tribal map and chronicle.
+   * @param {object} villager
+   */
+  debriefScout(villager) {
+    const home = this.game.getVillage(villager?.villageId);
+    const pm = this.game.placeMemory;
+    if (!home || !pm) return;
+
+    pm.observeSurroundings(villager);
+    const finds = (villager.knownPlaces || []).filter(e =>
+      e && !e.stale && !(e.tags || []).includes('home') && e.source !== 'seeded'
+    );
+    const result = home.mergeTribalMap(finds, 'scout');
+    if (result.added > 0) {
+      const sample = finds.find(e => e.kind === 'resource') || finds[0];
+      const detail = sample
+        ? `${sample.label} near (${sample.x}, ${sample.y})`
+        : `${result.added} places`;
+      this.game.addChronicleEntry(
+        `${villager.name} returned from scouting and shared word of ${detail}.`,
+        'normal',
+        home.id
+      );
+      villager.showSpeechBubble?.('🗺️', Utils.truncate(`Mapped ${detail}`, 36), 4500);
     }
   }
 

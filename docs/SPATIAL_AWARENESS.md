@@ -2,7 +2,8 @@
 
 **Scope:** Pathfinding, location mapping, landmarks, and how villagers learn, remember, and share places.  
 **Primary code:** `world.js` (`getPath`), `villager.js` (`moveTo` / wander), `systems/exploration.js`, `village.js` (`knownVillages`), `game.js` (resource lookup / territory), `llm.js` (action prompts).  
-**Implementation spec & plan:** [`docs/SPATIAL_AWARENESS_SPEC.md`](./SPATIAL_AWARENESS_SPEC.md) (authoritative for build work).
+**Implementation spec & plan:** [`docs/SPATIAL_AWARENESS_SPEC.md`](./SPATIAL_AWARENESS_SPEC.md) (authoritative for build work).  
+**Status:** Phases 0–3 implemented in codebase (`PlaceMemorySystem`, gather resolve, scout debrief, place gossip, territory-aware path + repath).
 
 ---
 

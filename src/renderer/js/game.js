@@ -317,6 +317,12 @@ class Game {
       this.tryDiscoverSecretThroughSocializing(partner, villager, 'high_relationship');
     }
 
+    // Geographic place rumors travel with talk/share/help
+    if (['share', 'talk', 'help', 'gossip'].includes(action.interactionType || 'talk')) {
+      this.trySharePlaceKnowledge(villager, partner);
+      this.trySharePlaceKnowledge(partner, villager);
+    }
+
     let notable = null;
     if (action.interactionType === 'argue') {
       notable = { text: `${villager.name} and ${partner.name} had a disagreement.`, type: 'conflict' };
@@ -337,11 +343,35 @@ class Game {
   }
 
   findNearestResourceInTerritory(villager, type, radius = 10) {
+    // Prefer place memory (personal/tribal) then sight-limited live fallback
+    if (this.placeMemory) {
+      const resolved = this.placeMemory.resolvePlaceTarget(villager, type, {
+        liveRadius: Math.min(radius, this.placeMemory.getLiveFallbackRadius())
+      });
+      if (resolved.liveResource) return resolved.liveResource;
+      if (resolved.entry && resolved.from !== 'none') {
+        const at = this.world.getResourceAt?.(resolved.x, resolved.y);
+        if (at && at.type === type && !at.depleted && at.amount > 0) return at;
+        // Believed coords with no live node — still return a synthetic target for moveTo
+        return {
+          id: resolved.entry.id,
+          type,
+          x: resolved.x,
+          y: resolved.y,
+          amount: 1,
+          depleted: false,
+          _fromMemory: true
+        };
+      }
+      return null;
+    }
+
     const village = this.getVillage(villager.villageId);
     if (!village) return this.findNearestResource(villager.x, villager.y, type, radius);
     return this.world.getResourcesInRadius(villager.x, villager.y, radius)
       .filter(r => r.type === type && !r.depleted && r.amount > 0 && village.isInTerritory(r.x, r.y))
-      .sort((a, b) => Utils.distance(a.x, a.y, villager.x, villager.y) - Utils.distance(b.x, b.y, villager.y))[0] || null;
+      .sort((a, b) => Utils.distance(a.x, a.y, villager.x, villager.y)
+        - Utils.distance(b.x, b.y, villager.x, villager.y))[0] || null;
   }
 
   // Currently selected tribe for HUD, chronicle, tech tree, and build menu
@@ -1111,6 +1141,7 @@ class Game {
     this.raidSystem = new RaidSystem(this);
     this.diplomacySystem = new DiplomacySystem(this);
     this.explorationSystem = new ExplorationSystem(this);
+    this.placeMemory = new PlaceMemorySystem(this);
   }
 
   newWorld() {
@@ -1527,6 +1558,9 @@ class Game {
       // Deduct from village resources
       village.resources.wood = Math.max(0, village.resources.wood - 5);
     });
+
+    // Seed personal + tribal place maps once home structures exist
+    this.placeMemory?.seedAllVillages?.();
   }
 
   togglePause() {
@@ -1774,6 +1808,7 @@ class Game {
     this.planAutonomousConstruction();
     this.applySeasonalDailyEffects();
     this.updateWeatherForSeason();
+    this.placeMemory?.decayAll?.();
     this.chronicleDirty = true; // rules days-left / compliance may have changed
 
     // Evaluate war escalation between villages
@@ -1845,6 +1880,7 @@ class Game {
     // Gossip and secret discovery (secrets must be exercised beyond affairs alone)
     this.processSecretDiscoveries();
     this.processGossipSpread();
+    this.processPlaceGossip();
   }
 
   applySeasonalDailyEffects() {
@@ -2090,6 +2126,39 @@ class Game {
           listener.showSpeechBubble?.('🗣️', Utils.truncate(gossipText, 40), 5000);
           this.addChronicleEntry(gossipText, 'normal', owner.villageId);
         }
+      }
+    }
+  }
+
+  /** Transfer one place rumor between tribe-mates when share chance fires. */
+  trySharePlaceKnowledge(speaker, listener) {
+    const pm = this.placeMemory;
+    if (!pm || !speaker || !listener) return false;
+    if (!pm.shouldShare(speaker, listener)) return false;
+    const place = pm.pickShareablePlace(speaker);
+    if (!place) return false;
+    const shared = pm.sharePlaceBetween(speaker, listener, place);
+    if (!shared) return false;
+    listener.showSpeechBubble?.(
+      '🗺️',
+      Utils.truncate(`${speaker.name}: ${place.label}`, 36),
+      4000
+    );
+    return true;
+  }
+
+  /** Daily tribe-scoped place gossip pass (alongside personality secrets). */
+  processPlaceGossip() {
+    const pm = this.placeMemory;
+    if (!pm) return;
+    for (const village of this.villages || []) {
+      const members = this.getVillagersForVillage(village.id);
+      if (members.length < 2) continue;
+      for (const spreader of members) {
+        if (Utils.randomFloat(0, 1) > 0.4) continue;
+        const listeners = members.filter(v => v.id !== spreader.id);
+        const listener = Utils.randomElement(listeners);
+        this.trySharePlaceKnowledge(spreader, listener);
       }
     }
   }
@@ -2926,7 +2995,9 @@ class Game {
       villageCenter: { ...village.center },
       villageName: village.name,
       territoryRadius: village.territoryRadius,
-      rivalVillage: rivalInfo
+      rivalVillage: rivalInfo,
+      landmarks: this.placeMemory?.summarizeLandmarks(village) || [],
+      knownResources: this.placeMemory?.summarizeKnownResources(village) || []
     };
   }
 
@@ -3667,33 +3738,63 @@ class Game {
     const village = this.getVillage(villager.villageId);
     const inTerritory = (r) => !village || village.isInTerritory(r.x, r.y);
 
-    // Find nearby resource of the specified type within tribal lands
-    const nearby = this.world.getResourcesInRadius(villager.x, villager.y, 8);
-    let resource = nearby.find(r => r.type === resourceType && !r.depleted && inTerritory(r));
+    // Prefer remembered / sight-range targets over omniscient long-range search
+    let resource = null;
+    let placeEntry = null;
+    if (this.placeMemory) {
+      const resolved = this.placeMemory.resolvePlaceTarget(villager, resourceType);
+      placeEntry = resolved.entry;
+      if (resolved.liveResource) {
+        resource = resolved.liveResource;
+      } else if (resolved.from !== 'none' && resolved.x != null) {
+        const at = this.world.getResourceAt?.(resolved.x, resolved.y);
+        if (at && at.type === resourceType && !at.depleted && inTerritory(at)) {
+          resource = at;
+        } else {
+          villager.moveTo(resolved.x, resolved.y, this.world, { placeEntry });
+          return 0;
+        }
+      }
+    }
+
+    if (!resource) {
+      const nearby = this.world.getResourcesInRadius(
+        villager.x, villager.y,
+        this.placeMemory?.getLiveFallbackRadius?.() || 8
+      );
+      resource = nearby.find(r => r.type === resourceType && !r.depleted && inTerritory(r));
+    }
 
     if (!resource) {
       resource = this.findNearestResourceInTerritory(villager, resourceType, 18);
       if (resource) {
-        villager.moveTo(resource.x, resource.y, this.world);
+        villager.moveTo(resource.x, resource.y, this.world, { placeEntry: placeEntry || null });
       }
       return 0;
     }
 
     if (resource) {
       const skillLevel = (villager.skills.gathering || 1) * this.getGatherTechMultiplier(resourceType, villager.villageId);
-      const gathered = this.world.harvestResource(resource.id, skillLevel);
+      const gathered = resource._fromMemory
+        ? 0
+        : this.world.harvestResource(resource.id, skillLevel);
+
+      if (resource._fromMemory || Utils.distance(villager.x, villager.y, resource.x, resource.y) > 1.5) {
+        villager.moveTo(resource.x, resource.y, this.world, { placeEntry: placeEntry || null });
+        return gathered > 0 ? gathered : 0;
+      }
 
       if (gathered > 0) {
-        // Move to the resource to gather it
-        villager.moveTo(resource.x, resource.y, this.world);
+        villager.moveTo(resource.x, resource.y, this.world, { placeEntry: placeEntry || null });
 
         this.addResource(resourceType, gathered, villager.villageId, villager.x, villager.y);
         if (resourceType === CONSTANTS.RESOURCE.FISH) {
           this.addResource(CONSTANTS.RESOURCE.FOOD, gathered, villager.villageId, villager.x, villager.y);
         }
         villager.addInteraction('gather', resourceType, `Gathered ${gathered} ${resourceType}`);
+        this.placeMemory?.observeSurroundings(villager);
+        this.placeMemory?.confirmArrival(villager, placeEntry);
 
-        // Chronicle entry for significant gathers
         if (gathered >= 5) {
           this.addChronicleEntry(`${villager.name} gathered ${gathered} ${resourceType} from the ${resource.biome || 'wilderness'}.`);
         }
@@ -5265,6 +5366,15 @@ Respond with JSON: {
 
       // Instantiate systems after villages restored
       this.ensureVillageSystems();
+
+      // Migrate missing place maps / seed home landmarks for older saves
+      this.villagers.forEach(v => {
+        if (!Array.isArray(v.knownPlaces)) v.knownPlaces = [];
+      });
+      this.villages.forEach(v => {
+        if (!Array.isArray(v.tribalMap)) v.tribalMap = [];
+      });
+      this.placeMemory?.seedAllVillages?.();
 
       // Migrate legacy Game.resources orphan pool only for pre-multi-village saves
       if (saveData.resources && !saveData.villages) {

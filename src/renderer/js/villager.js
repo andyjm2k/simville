@@ -77,6 +77,14 @@ class Villager {
     this.isScouting = data.isScouting || false;
     this.scoutMission = data.scoutMission || null;
 
+    // Personal place memory and locality (spatial awareness)
+    this.knownPlaces = Array.isArray(data.knownPlaces) ? data.knownPlaces : [];
+    this.locality = data.locality || null;
+    this._lastObserveAt = 0;
+    this._lastLocalityTile = null;
+    this._repathAttempts = 0;
+    this._pendingPlaceTarget = null;
+
     // Interaction log
     this.interactionLog = [];
 
@@ -387,6 +395,9 @@ class Villager {
       return;
     }
 
+    // Throttled observation + locality while alive on the map
+    this.maybeObserveAndLocalize(deltaTime);
+
     // Natural wandering behavior when idle or after reaching destination
     if (!this.isMoving) {
       if (this.isScouting || this.isNeedLockedActivity()) return;
@@ -404,7 +415,27 @@ class Villager {
     // Move along path
     if (this.path.length > 0) {
       const target = this.path[0];
-      if (world && !world.isWalkable(target.x, target.y)) {
+      const blocked = world && (
+        !world.isWalkable(target.x, target.y)
+        || (game?.canVillagerEnterTerritory && !game.canVillagerEnterTerritory(this, target.x, target.y))
+      );
+      if (blocked) {
+        // Single repath toward the same goal before giving up
+        if (this._repathAttempts < 1 && world?.getPath) {
+          this._repathAttempts += 1;
+          const retried = world.getPath(
+            Math.round(this.x), Math.round(this.y),
+            this.targetX, this.targetY,
+            {
+              canEnterTile: (tx, ty) => !game?.canVillagerEnterTerritory
+                || game.canVillagerEnterTerritory(this, tx, ty)
+            }
+          );
+          if (retried && retried.length > 0) {
+            this.path = retried;
+            return;
+          }
+        }
         this.stopMoving();
         return;
       }
@@ -420,6 +451,7 @@ class Villager {
           this.isMoving = false;
           this.x = target.x;
           this.y = target.y;
+          this.onReachedDestination();
           if (!this.isNeedLockedActivity()) {
             this.status = CONSTANTS.ACTIVITY.IDLE;
           }
@@ -449,6 +481,37 @@ class Villager {
     } else {
       this.isMoving = false;
     }
+  }
+
+  /** Observe surroundings on an interval and refresh locality when the tile changes. */
+  maybeObserveAndLocalize(deltaTime) {
+    const pm = game?.placeMemory;
+    if (!pm) return;
+    const now = (this._lastObserveAt || 0) + deltaTime;
+    this._lastObserveAt = now;
+    const interval = CONSTANTS.PLACE_MEMORY?.OBSERVE_INTERVAL_MS || 1500;
+    if (now >= interval) {
+      this._lastObserveAt = 0;
+      pm.observeSurroundings(this);
+    }
+    const tile = { x: Math.round(this.x), y: Math.round(this.y) };
+    const last = this._lastLocalityTile;
+    const step = CONSTANTS.PLACE_MEMORY?.LOCALITY_UPDATE_TILES || 2;
+    if (!last || Utils.distance(tile.x, tile.y, last.x, last.y) >= step) {
+      pm.updateLocality(this);
+    }
+  }
+
+  /** Confirm pending place memory when a path completes. */
+  onReachedDestination() {
+    const pm = game?.placeMemory;
+    if (!pm) return;
+    pm.observeSurroundings(this);
+    if (this._pendingPlaceTarget) {
+      pm.confirmArrival(this, this._pendingPlaceTarget);
+      this._pendingPlaceTarget = null;
+    }
+    pm.updateLocality(this);
   }
 
   startWandering(world) {
@@ -627,12 +690,26 @@ class Villager {
       return true;
     }
 
-    const path = world.getPath(Math.round(this.x), Math.round(this.y), destination.x, destination.y);
+    // Territory-aware path: avoid closed foreign tiles unless explicitly allowed
+    const pathOptions = {
+      canEnterTile: (tx, ty) => {
+        if (options.allowCrossTerritory) return true;
+        if (!game?.canVillagerEnterTerritory) return true;
+        return game.canVillagerEnterTerritory(this, tx, ty);
+      }
+    };
+    const path = world.getPath(
+      Math.round(this.x), Math.round(this.y),
+      destination.x, destination.y,
+      pathOptions
+    );
     if (path && path.length > 0) {
       this.path = path;
       this.isMoving = true;
       this.targetX = destination.x;
       this.targetY = destination.y;
+      this._repathAttempts = 0;
+      if (options.placeEntry) this._pendingPlaceTarget = options.placeEntry;
       if (!this.isNeedLockedActivity()) {
         this.status = CONSTANTS.ACTIVITY.WORKING; // Moving for a purpose
       }
@@ -858,7 +935,9 @@ class Villager {
       hairColor: this.hairColor,
       spriteVariant: this.spriteVariant,
       isScouting: this.isScouting,
-      scoutMission: this.scoutMission
+      scoutMission: this.scoutMission,
+      knownPlaces: this.knownPlaces || [],
+      locality: this.locality || null
     };
   }
 

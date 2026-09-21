@@ -1,7 +1,7 @@
 # Spatial Awareness — Implementation Specification & Plan
 
 **Parent review:** [`docs/SPATIAL_AWARENESS.md`](./SPATIAL_AWARENESS.md)  
-**Status:** Ready to implement  
+**Status:** Phases 0–3 implemented (v1)  
 **Target stack:** Electron + vanilla JS (Canvas), existing `systems/*` pattern  
 **Out of scope for v1:** Raid map marching, multiplayer fog sync, navmesh / hierarchical pathfinding
 

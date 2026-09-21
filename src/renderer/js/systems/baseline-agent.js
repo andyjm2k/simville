@@ -39,7 +39,15 @@ class BaselineAgent {
    * @returns {{x:number,y:number}|null}
    */
   findResourceTarget(villager, game, resourceType) {
-    const resource = game.findNearestResource?.(villager.x, villager.y, resourceType, 18);
+    // Prefer place-memory resolve so baseline matches LLM gather awareness
+    if (game.placeMemory?.resolvePlaceTarget) {
+      const resolved = game.placeMemory.resolvePlaceTarget(villager, resourceType);
+      if (resolved.from !== 'none' && resolved.x != null) {
+        return { x: resolved.x, y: resolved.y };
+      }
+    }
+    const resource = game.findNearestResourceInTerritory?.(villager, resourceType, 18)
+      || game.findNearestResource?.(villager.x, villager.y, resourceType, 18);
     if (resource) return { x: resource.x, y: resource.y };
     const center = game.getVillage(villager.villageId)?.center || game.world?.villageCenter;
     if (!center) return null;

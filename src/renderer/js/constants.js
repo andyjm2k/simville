@@ -532,6 +532,57 @@ const CONSTANTS = {
     EXPLORED_TILE_RADIUS: 2
   },
 
+  // Personal / tribal place memory (spatial awareness)
+  PLACE_MEMORY: {
+    PERSONAL_CAP: 24,
+    TRIBAL_CAP: 48,
+    SIGHT_RANGE: null,
+    MIN_CONFIDENCE_USE: 0.25,
+    SEEN_CONFIDENCE: 0.95,
+    SCOUT_CONFIDENCE: 0.8,
+    TOLD_CONFIDENCE: 0.55,
+    RUMOR_CONFIDENCE: 0.35,
+    SEEN_PRECISION: 1.0,
+    TOLD_PRECISION: 0.75,
+    RUMOR_PRECISION: 0.4,
+    RUMOR_JITTER_TILES: 3,
+    CONFIDENCE_DECAY_PER_DAY: 0.02,
+    SEEN_DECAY_PER_DAY: 0.005,
+    CONFIRM_BOOST: 0.15,
+    MISS_PENALTY: 0.35,
+    OBSERVE_INTERVAL_MS: 1500,
+    SHARE_BASE_CHANCE: 0.35,
+    CURIOSITY_SHARE_BONUS: 0.25,
+    SOCIABLE_SHARE_BONUS: 0.15,
+    LIVE_FALLBACK_RADIUS: null,
+    LOCALITY_UPDATE_TILES: 2
+  },
+
+  PLACE_KIND: {
+    LANDMARK: 'landmark',
+    RESOURCE: 'resource',
+    STRUCTURE: 'structure',
+    VILLAGE: 'village',
+    WAYPOINT: 'waypoint',
+    HAZARD: 'hazard'
+  },
+
+  PLACE_SOURCE: {
+    SEEN: 'seen',
+    TOLD: 'told',
+    SCOUT: 'scout',
+    RITUAL: 'ritual',
+    RUMOR: 'rumor',
+    SEEDED: 'seeded'
+  },
+
+  PLACE_ZONE: {
+    HOME: 'home',
+    WILDERNESS: 'wilderness',
+    BORDER: 'border',
+    FOREIGN: 'foreign'
+  },
+
   // Village identity
   VILLAGE: {
     DEFAULT_RADIUS: 12,
@@ -588,4 +639,8 @@ Object.freeze(CONSTANTS.WAR);
 Object.freeze(CONSTANTS.DIPLOMACY);
 Object.freeze(CONSTANTS.TERRITORY_ACCESS);
 Object.freeze(CONSTANTS.EXPLORATION);
+Object.freeze(CONSTANTS.PLACE_MEMORY);
+Object.freeze(CONSTANTS.PLACE_KIND);
+Object.freeze(CONSTANTS.PLACE_SOURCE);
+Object.freeze(CONSTANTS.PLACE_ZONE);
 Object.freeze(CONSTANTS.VILLAGE);
