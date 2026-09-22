@@ -738,11 +738,17 @@ class World {
   }
 
   // Get a complete walkable path between two points.
-  getPath(startX, startY, endX, endY) {
+  // options.canEnterTile(x,y) may exclude closed foreign territory for a villager.
+  getPath(startX, startY, endX, endY, options = {}) {
     const start = this.getWalkableTileNear(startX, startY, 2);
     const end = this.getWalkableTileNear(endX, endY, 3);
     if (!start || !end) return null;
     if (start.x === end.x && start.y === end.y) return [];
+
+    const canEnter = typeof options.canEnterTile === 'function'
+      ? options.canEnterTile
+      : () => true;
+    const maxLength = options.maxLength || 0;
 
     const queue = [{ x: start.x, y: start.y }];
     let head = 0;
@@ -761,7 +767,7 @@ class World {
         const nx = current.x + dx;
         const ny = current.y + dy;
         const key = `${nx},${ny}`;
-        if (visited.has(key) || !this.isWalkable(nx, ny)) continue;
+        if (visited.has(key) || !this.isWalkable(nx, ny) || !canEnter(nx, ny)) continue;
 
         visited.add(key);
         cameFrom.set(key, current);
@@ -777,6 +783,7 @@ class World {
       path.unshift(current);
       current = cameFrom.get(`${current.x},${current.y}`);
       if (!current) return null;
+      if (maxLength > 0 && path.length > maxLength) return null;
     }
 
     return path;

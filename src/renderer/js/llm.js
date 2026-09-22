@@ -575,6 +575,10 @@ Respond with valid JSON only: {"chronicle":"Your 2-3 sentence chronicle text her
       mood: v.mood,
       status: v.status,
       position: { x: Math.round(v.x), y: Math.round(v.y) },
+      locality: v.locality?.description || null,
+      knownPlaces: (typeof game !== 'undefined' && game?.placeMemory)
+        ? game.placeMemory.summarizeVillagerPlaces(v)
+        : 'none',
       relationships: v.relationships ? Object.entries(v.relationships).slice(0, 3).map(([key, score]) => {
         const name = v.getRelationshipDisplayName?.(key) || key;
         const other = villagers.find(o => o.id === key || o.name === key);
@@ -591,6 +595,12 @@ Respond with valid JSON only: {"chronicle":"Your 2-3 sentence chronicle text her
 
     // Include structure positions for context
     const structureContext = worldState.structures?.map(s => `${s.type} at (${s.x}, ${s.y})`).join(', ') || 'none yet';
+    const landmarkContext = (worldState.landmarks || [])
+      .map(l => `${l.label} (${l.x}, ${l.y})`)
+      .join(', ') || 'village center only';
+    const knownResourceContext = (worldState.knownResources || [])
+      .map(r => `${r.type}@(${r.x},${r.y}) c=${Number(r.confidence || 0).toFixed(1)} ${r.source || ''}`)
+      .join('; ') || 'none mapped yet';
     const center = worldState.villageCenter || { x: 32, y: 32 };
     const territoryRadius = worldState.territoryRadius || 12;
     const villageName = worldState.villageName || 'your tribe';
@@ -620,13 +630,15 @@ TRIBE: ${villageName}
 VILLAGE RESOURCES: Wood=${worldState.resources.wood}, Food=${worldState.resources.food}, Water=${worldState.resources.water}, Stone=${worldState.resources.stone}, Herbs=${worldState.resources.herbs}, Clay=${worldState.resources.clay}, Fish=${worldState.resources.fish || 0}, Thatch=${worldState.resources.thatch || 0}, RareMaterials=${worldState.resources.rareMaterials || 0}
 POPULATION: ${villagers.length} villagers (all belong to ${villageName})
 STRUCTURES: ${structureContext}
+LANDMARKS: ${landmarkContext}
+KNOWN RESOURCES (tribal map): ${knownResourceContext}
 WORLD SIZE: 64x64 tiles
 YOUR VILLAGE CENTER: (${center.x}, ${center.y})
 YOUR HOME TERRITORY: ${territoryRadius} tiles (daily work, gathering, and social life stay here)
 EXPLORATION RANGE: curious villagers may travel up to ~${exploreRange} tiles from center through UNCLAIMED land
 ${rivalBlock}
 
-VILLAGERS (with current positions):
+VILLAGERS (with current positions and known places):
 ${JSON.stringify(villagerSummaries, null, 2)}
 
 Based on each villager's needs, personality, and the time of day, decide what they should do next.
@@ -634,7 +646,7 @@ Based on each villager's needs, personality, and the time of day, decide what th
 Output JSON with an "actions" array. Each action has:
 - villagerId: string (the villager's id)
 - action: idle|working|gathering|building|farming|hunting|fishing|socializing|sleeping|eating|drinking|resting|ritual|scouting
-- moveTo: {x: number, y: number} - home-territory tiles for work/social life; wilderness tiles allowed for scouting (${center.x}±${exploreRange}, ${center.y}±${exploreRange})
+- moveTo: {x: number, y: number} - prefer LANDMARKS / knownPlaces / knownResources coords matching the action; home-territory tiles for work/social life; wilderness tiles allowed for scouting (${center.x}±${exploreRange}, ${center.y}±${exploreRange})
 - target: optional villager name or resource type
 - duration: 1-10 (minutes in game time)
 - speechEmoji: emoji from this list 💬😂😢😠😍🤝😮🤔🍖😴💪🎣🏠👶🙏🎉
@@ -644,10 +656,11 @@ Output JSON with an "actions" array. Each action has:
 
 Rules:
 - TRIBAL BOUNDARIES: Daily life stays in ${villageName}'s home lands around (${center.x}, ${center.y}). Curious villagers may scout unclaimed wilderness. Foreign claimed land opens ONLY via conquest (war) or trade track (trade/alliance/friendly) — never from discovery alone.
+- PLACE MEMORY: Prefer moveTo toward listed LANDMARKS, tribal KNOWN RESOURCES, and each villager's knownPlaces. Do not invent coordinates outside those lists, home territory, or exploration range. Low-confidence rumors (~) may still be visited to confirm.
 - EXPLORATION: Assign at least one healthy curious villager to scouting/moveTo in unclaimed land between tribes when the other tribe is undiscovered.
 - SOCIAL BONDS: Only socialize with villagers from your own tribe listed above. Rival tribes are separate communities.
 - CRITICAL SURVIVAL PRIORITY: If ANY villager has hunger < 40, thirst < 40, or energy < 30, they MUST be assigned eating, drinking, gathering, hunting, fishing, or resting. NEVER assign idle, working, socializing, or building to a villager with critical needs.
-- Movement should be purposeful - if action is gathering, move towards resources within your territory
+- Movement should be purposeful - if action is gathering, move towards known resources within your territory
 - If socializing, move towards another villager from your tribe
 - If sleeping/eating/drinking, move towards a hut, fire, well, or water source in your village
 - Active villagers should be working or gathering within tribal lands unless they are scouting

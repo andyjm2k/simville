@@ -48,7 +48,8 @@ describe('Village', () => {
       center: { x: 12, y: 18 },
       villagerIds: ['a', 'b'],
       relations: { other: -15 },
-      knownVillages: ['other']
+      knownVillages: ['other'],
+      tribalMap: [{ id: 'landmark:village_center:village-test', kind: 'landmark', label: 'center', x: 12, y: 18, confidence: 1, precision: 1, source: 'seeded', tags: ['home'], lastSeenDay: 1, ownerVillageId: 'village-test', resourceType: null, stale: false }]
     });
 
     const restored = Village.deserialize(original.serialize());
@@ -58,6 +59,8 @@ describe('Village', () => {
     expect(restored.villagerIds).toEqual(original.villagerIds);
     expect(restored.relations).toEqual(original.relations);
     expect(restored.knownVillages).toEqual(['other']);
+    expect(restored.tribalMap).toHaveLength(1);
+    expect(restored.tribalMap[0].id).toContain('village_center');
   });
 
   it('stores distinct chronicle and tech state per village', () => {
