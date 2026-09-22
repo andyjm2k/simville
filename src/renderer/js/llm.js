@@ -581,8 +581,15 @@ Respond with valid JSON only: {"chronicle":"Your 2-3 sentence chronicle text her
         : 'none',
       relationships: v.relationships ? Object.entries(v.relationships).slice(0, 3).map(([key, score]) => {
         const name = v.getRelationshipDisplayName?.(key) || key;
-        return `${name}: ${score}`;
+        const other = villagers.find(o => o.id === key || o.name === key);
+        const reverse = other ? (other.getRelationship?.(v) ?? other.relationships?.[v.id] ?? null) : null;
+        if (reverse != null && Math.abs(score - reverse) >= 8) {
+          return `${name}: you→${Math.round(score)}, they→${Math.round(reverse)}`;
+        }
+        return `${name}: ${Math.round(score)}`;
       }) : [],
+      prestige: Math.round(v.prestige ?? 25),
+      standing: (v.prestige ?? 25) >= 70 ? 'respected' : (v.prestige ?? 25) < 20 ? 'overlooked' : 'ordinary',
       goals: v.goals?.filter(g => !g.completed).slice(0, 1).map(g => g.description) || []
     }));
 
@@ -863,14 +870,16 @@ ${recentEvents.map(e => `- ${e}`).join('\n')}
 Based on these events, how should the relationship between these villages change?
 
 Output JSON with:
-- relationDelta: number between -10 and +10 (positive improves relations, negative worsens)
+- relationDelta: number between -5 and +5 (positive improves relations, negative worsens)
 - summary: brief explanation of why`;
 
     const result = await this.generate(prompt);
 
     if (result && typeof result.relationDelta === 'number') {
+      const clampN = CONSTANTS.RELATIONSHIP?.LLM_RELATION_DELTA_CLAMP ?? 5;
+      const delta = Utils.clamp(result.relationDelta, -clampN, clampN);
       return {
-        [v2.id]: Utils.clamp(currentRelation + result.relationDelta, -100, 100)
+        [v2.id]: Utils.clamp(currentRelation + delta, -100, 100)
       };
     }
 

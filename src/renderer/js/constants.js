@@ -115,7 +115,7 @@ const CONSTANTS = {
     SOCIAL_SATISFIED: 75
   },
 
-  // Relationship bounds
+  // Relationship bounds and social-dynamics balance (SOCIAL_DYNAMICS_PLAN.md)
   RELATIONSHIP: {
     MIN: -100,
     MAX: 100,
@@ -126,7 +126,73 @@ const CONSTANTS = {
     SOULMATE_THRESHOLD: 90,
     DIVORCE_THRESHOLD: 15,
     JEALOUSY_THRESHOLD: -30,
-    AFFAIR_MUTUAL_THRESHOLD: 65
+    AFFAIR_MUTUAL_THRESHOLD: 65,
+    // Phase 1 — neglect / passive deepen
+    NEGLECT_DECAY_PER_DAY: 0.35,
+    BASELINE_SCORE: 0,
+    FAMILY_BASELINE_SCORE: 40,
+    PARTNER_BASELINE_SCORE: 50,
+    FRIEND_PASSIVE_CAP: 25,
+    PARTNER_PASSIVE_BONUS: 1.2,
+    FAMILY_PASSIVE_BIAS: 0.35,
+    CONTACT_WINDOW_DAYS: 3,
+    PARTNER_DEEPEN_RATE: 0.35,
+    // Phase 1 — typed interaction deltas (in-range social actions)
+    INTERACTION_DELTA: {
+      talk: 1.5,
+      share: 2.5,
+      help: 5,
+      romance: 4,
+      gossip: 1,
+      argue: -6
+    },
+    // Phase 4 — mood from strong ties / enemies
+    MOOD_REL_TOP_K: 3,
+    MOOD_REL_POS_WEIGHT: 0.12,
+    MOOD_REL_NEG_WEIGHT: 0.15,
+    // Phase 4 — partner selection utility weights
+    PARTNER_BOND_PULL_MAX: 20,
+    PARTNER_SPOUSE_BONUS: 15,
+    PARTNER_FAMILY_BONUS: 10,
+    PARTNER_GOAL_BONUS: 12,
+    PARTNER_ENEMY_PENALTY: 25,
+    PARTNER_LONELY_BONUS: 8,
+    PARTNER_PRESTIGE_WEIGHT: 0.05,
+    // Phase 5 — inter-tribe personal / folk diplomacy
+    CROSS_TRIBE_PRIOR: -8,
+    FOLK_DRIFT_POS: 0.02,
+    FOLK_DRIFT_NEG: 0.03,
+    FOLK_DRIFT_CLAMP: 0.5,
+    HOSTILE_DEEPEN_MULT: 0.25,
+    HOSTILE_FRICTION: 0.4,
+    CONQUEST_TRAUMA_MIN: 20,
+    CONQUEST_TRAUMA_MAX: 40,
+    CONQUEST_GRUDGE_CHANCE: 0.4,
+    WAR_ROMANCE_COOLDOWN_DAYS: 20,
+    LLM_RELATION_INTERVAL_DAYS: 5,
+    LLM_RELATION_DELTA_CLAMP: 5,
+    // Phase 6 — rituals / cliques / prestige
+    RITUAL_SKIP_MOOD: -10,
+    RITUAL_SKIP_TO_LEADER: -5,
+    RITUAL_LEADER_TO_SKIP: -2,
+    FUNERAL_FAMILY_EXTRA: 6,
+    FUNERAL_FAMILY_ABSENT_MOOD: -15,
+    CLIQUE_MIN_SIZE: 3,
+    CLIQUE_FRIEND_LINKS: 2,
+    CLIQUE_IN_MULT: 1.25,
+    CLIQUE_OUT_MULT: 0.85,
+    CLIQUE_GOSSIP_BONUS: 0.1,
+    PRESTIGE_CHIEFTAN: 60,
+    PRESTIGE_ELDER: 45,
+    PRESTIGE_ADULT: 25,
+    PRESTIGE_YOUTH: 10,
+    PRESTIGE_CHILD: 5,
+    PRESTIGE_SOCIAL_GOAL: 70,
+    PRESTIGE_RITUAL_LEAD: 1,
+    PRESTIGE_PUBLIC_TALENT: 5,
+    PRESTIGE_PUBLIC_SCANDAL: -8,
+    ASYM_UI_THRESHOLD: 8,
+    SOCIAL_MODEL_VERSION: 2
   },
 
   // Ritual types
@@ -164,7 +230,7 @@ const CONSTANTS = {
       participants: 'all',
       duration: 20,
       moodBoost: -10,
-      socialGain: 0,
+      socialGain: 4,
       emoji: '🕯️'
     },
     NAME_CEREMONY: {
@@ -205,7 +271,7 @@ const CONSTANTS = {
     }
   },
 
-  // Secret types
+  // Secret types (string values only — Object.values used for type checks)
   SECRET: {
     HIDDEN_TALENT: 'hidden_talent',
     PAST_BETRAYAL: 'past_betrayal',
@@ -214,6 +280,24 @@ const CONSTANTS = {
     ILLNESS: 'illness',
     ASPIRATION: 'aspiration',
     GRUDGE: 'grudge'
+  },
+
+  // Secret gossip / public-knowledge dynamics (Phase 3)
+  SECRET_DYNAMICS: {
+    PUBLIC_THRESHOLD_FRACTION: 0.5,
+    PUBLIC_SHOCK_MOOD: -8,
+    PUBLIC_SHOCK_OWNER_REL: -3,
+    EMPATH_SUPPRESS_CHANCE: 0.25,
+    WEAPONIZE_MULT: 1.5,
+    GOSSIP_OPINION: {
+      hidden_talent: { towardOwner: 3, towardTarget: 0 },
+      past_betrayal: { towardOwner: -6, towardTarget: 4 },
+      forbidden_romance: { towardOwner: -4, towardTarget: -4 },
+      hidden_stash: { towardOwner: -5, towardTarget: 0 },
+      illness: { towardOwner: 2, towardTarget: 0 },
+      aspiration: { towardOwner: 2, towardTarget: 0 },
+      grudge: { towardOwner: -2, towardTarget: 3 }
+    }
   },
 
   // Goal types
@@ -624,8 +708,11 @@ Object.freeze(CONSTANTS.TIME);
 Object.freeze(CONSTANTS.SEASON);
 Object.freeze(CONSTANTS.NEED);
 Object.freeze(CONSTANTS.RELATIONSHIP);
+Object.freeze(CONSTANTS.RELATIONSHIP.INTERACTION_DELTA);
 Object.freeze(CONSTANTS.RITUAL);
 Object.freeze(CONSTANTS.SECRET);
+Object.freeze(CONSTANTS.SECRET_DYNAMICS);
+Object.freeze(CONSTANTS.SECRET_DYNAMICS.GOSSIP_OPINION);
 Object.freeze(CONSTANTS.GOAL);
 Object.freeze(CONSTANTS.EMOJI);
 Object.freeze(CONSTANTS.PERSONALITY);

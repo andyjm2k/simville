@@ -120,12 +120,16 @@ Each villager has these core attributes:
 ### 4.4 Relationship System
 
 - **Relationship Score:** -100 (enemies) to +100 (soulmates/best friends)
-- **Types:** Romantic partner, friend, acquaintance, rival, family
-- **Trust:** Builds through positive interactions
-- **Jealousy:** Can trigger conflicts in romantic triangles
-- **Family Bonds:** Parent-child relationships auto-set, improve over time
+- **Direction:** Scores are **directed** (A→B may differ from B→A). Marriage, pregnancy, and similar gates use the **mutual average**. See `SOCIAL_DYNAMICS_PLAN.md` Phase 2.
+- **Types:** Romantic partner, friend, acquaintance, rival, family (derived from score thresholds)
+- **Contact & neglect:** Bonds drift toward a baseline without recent meaningful contact; passive daily deepen cannot push non-partners past Friend without contact (`SOCIAL_DYNAMICS_PLAN.md` Phase 1)
+- **Typed interactions:** `talk` / `share` / `help` / `romance` / `gossip` / `argue` apply distinct deltas (not a single ± flat value)
+- **Trust:** Approximated by directed score + secret discovery gates; a separate Trust channel is an optional follow-up after the social dynamics plan
+- **Jealousy:** Directed conflict in romantic triangles (spouse→rival / spouse→unfaithful)
+- **Family Bonds:** Parent-child relationships auto-set; family has a higher neglect baseline but can still strain under mood/hunger/neglect
 - **Affairs:** Married villagers may have secret affairs (personality dependent)
-- **Divorce:** Couples with low relationship scores and poor mood may divorce
+- **Divorce:** Couples with low mutual relationship scores and poor mood may divorce
+- **Implementation plan:** Phased delivery and acceptance criteria live in [`SOCIAL_DYNAMICS_PLAN.md`](./SOCIAL_DYNAMICS_PLAN.md)
 
 ### 4.5 Life Stages
 
@@ -609,8 +613,11 @@ Gossip spreads through the village:
 1. Villager learns secret (through interaction or observation)
 2. If sociable, they may share with others
 3. Gossip travels 1-2 villagers per day cycle
-4. Secrets spread until they become village knowledge or are suppressed
+4. Each hop adjusts the listener's directed opinions of the owner/target
+5. Secrets spread until they become publicKnowledge (~50% of tribe adults) or are suppressed
 ```
+
+Detailed opinion tables, suppression rules, and public shock effects: `SOCIAL_DYNAMICS_PLAN.md` Phase 3.
 
 ### 13.5 Divorce & Infidelity
 
@@ -738,10 +745,11 @@ Output: 2-3 sentence description suitable for chronicle.
 
 ### 15.4 Ritual Mood Effects
 
-- Attending rituals: Relationship +3 with all participants
-- Skipping rituals: Relationship -5 with ritual leaders, mood -10 (shame)
+- Attending rituals: Relationship gains with all participants (`socialGain` from ritual constants; funerals bond mourners)
+- Skipping rituals: Relationship -5 toward ritual leaders, mood -10 (shame); close-family funeral absences are grief, not shame
 - Leading rituals (chieftan/elder): Prestige increase
 - First-time rituals (coming of age, first harvest dance): Special significance
+- Soft prestige + informal cliques: `SOCIAL_DYNAMICS_PLAN.md` Phase 6
 
 ---
 
@@ -913,10 +921,13 @@ simville/
 ### 20.3 Simulation Depth
 
 - [ ] Villagers pursue goals based on needs
-- [ ] Relationships change over time
+- [ ] Relationships change over time (including neglect decay and typed interaction deltas — `SOCIAL_DYNAMICS_PLAN.md` P1)
+- [ ] Directed jealousy / asymmetric opinions work (`SOCIAL_DYNAMICS_PLAN.md` P2)
+- [ ] Gossip changes opinions and can become public knowledge (`SOCIAL_DYNAMICS_PLAN.md` P3)
 - [ ] New villagers can be born (marriage → pregnancy → birth)
 - [ ] Village expands with new structures
 - [ ] Villager actions feel personality-consistent
+- [ ] Social partner choice and mood weight strong ties / enemies (`SOCIAL_DYNAMICS_PLAN.md` P4)
 
 ### 20.4 Visual Polish
 
@@ -980,9 +991,11 @@ simville/
 - [ ] Each village has separate resource pools
 - [ ] Villagers are assigned to a village via villageId
 - [ ] Inter-village relationships tracked (-100 to 100)
+- [ ] Personal cross-tribe bonds slowly drift village relations; conquest preserves trauma memory (`SOCIAL_DYNAMICS_PLAN.md` P5)
 - [ ] Villages can be at war, hostile, neutral, friendly, or allied
 - [ ] LLM-driven diplomatic decisions for chieftans
 - [ ] Conquest mechanics when one village overwhelms another
+- [ ] Ritual skip shame, funeral bonding, cliques / prestige (`SOCIAL_DYNAMICS_PLAN.md` P6)
 - [ ] Minimap shows both village territories
 - [ ] Save/load supports multi-village state
 
@@ -1018,6 +1031,9 @@ Each village is an independent entity with:
 | +30 to +69 | Friendly |
 | +70 to +100 | Allied |
 
+**Folk diplomacy:** Strong cross-tribe personal friendships slowly raise village relations; entrenched personal rivals slowly lower them (clamped daily drift; cannot alone force war or alliance). Hostile village scores apply friction to personal deepen. First peaceful cross-tribe contact initializes personal priors below 0. See `SOCIAL_DYNAMICS_PLAN.md` Phase 5.
+
+**Conquest memory:** Absorbing a village retains personal relationship keys with trauma bias and possible grudges instead of wiping history.
 ### 21.3 Diplomacy Actions
 
 Chieftans can choose these actions via LLM:

@@ -29,6 +29,8 @@ const SYSTEM_SCRIPT_ORDER = [
   'systems/place-memory.js',
   'systems/place-memory-social.js',
   'systems/exploration.js',
+  'systems/social.js',
+  'systems/social-community.js',
   'systems/baseline-agent.js',
   'systems/benchmark.js'
 ];
@@ -55,6 +57,8 @@ const SCRIPT_EXPORTS = {
   'systems/place-memory.js': ['PlaceMemorySystem'],
   'systems/place-memory-social.js': [],
   'systems/exploration.js': ['ExplorationSystem'],
+  'systems/social.js': ['SocialSystem'],
+  'systems/social-community.js': ['SocialSystem'],
   'systems/baseline-agent.js': ['BaselineAgent'],
   'systems/benchmark.js': ['BenchmarkScorer', 'BenchmarkRunner'],
   'game.js': ['Game', 'game']
@@ -81,6 +85,7 @@ const GLOBAL_EXPORTS = [
   'DiplomacySystem',
   'PlaceMemorySystem',
   'ExplorationSystem',
+  'SocialSystem',
   'BaselineAgent',
   'BenchmarkScorer',
   'BenchmarkRunner',

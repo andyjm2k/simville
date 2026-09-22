@@ -64,11 +64,12 @@ class Game {
     this.nextChieftanDecision = {};  // { villageId: dayNumber } - when to request next decision
     this.hostileDaysCount = {};  // { villageId_pair: days } - tracking days at hostile relations
 
-    // Economy / raid systems (instantiated once villages exist)
+    // Economy / raid / social systems (instantiated once villages exist)
     this.economy = null;
     this.raidSystem = null;
     this.diplomacySystem = null;
     this.explorationSystem = null;
+    this.socialSystem = null;
     this.hudVillageId = null;
 
     // Benchmark mode (headless LLM vs opponent)
@@ -177,31 +178,19 @@ class Game {
   }
 
   findSocialPartner(villager, preferred = null) {
+    if (this.socialSystem) {
+      return this.socialSystem.findSocialPartner(villager, preferred);
+    }
     if (preferred && this.canVillagersSocialize(villager, preferred) && preferred.health > 0) {
       return preferred;
     }
-
     const candidates = this.villagers.filter(other =>
       other.health > 0 &&
       !other.isScouting &&
       this.canVillagersSocialize(villager, other)
     );
     if (!candidates.length) return null;
-
-    const existing = candidates.find(other => other.id === villager.socialPartnerId);
-    if (existing) return existing;
-
-    const incoming = candidates.find(other => other.socialPartnerId === villager.id);
-    if (incoming) return incoming;
-
-    return candidates.sort((a, b) => {
-      const distA = Utils.distance(villager.x, villager.y, a.x, a.y);
-      const distB = Utils.distance(villager.x, villager.y, b.x, b.y);
-      const lonelyA = a.socialNeed < (CONSTANTS.NEED.SOCIAL_SEEK || 40) ? -8 : 0;
-      const lonelyB = b.socialNeed < (CONSTANTS.NEED.SOCIAL_SEEK || 40) ? -8 : 0;
-      return (distA + lonelyA - villager.getRelationship(a) * 0.05) -
-        (distB + lonelyB - villager.getRelationship(b) * 0.05);
-    })[0] || null;
+    return candidates[0] || null;
   }
 
   getSocialMeetupPoint(villager, partner) {
@@ -292,9 +281,18 @@ class Game {
     const named = action.interactionTarget || (typeof action.target === 'string' ? action.target : null);
     // Prefer same-tribe name matches so duplicate names across villages do not steal partners
     const namedTarget = named ? this.resolveVillagerByNameOrId(named, villager.villageId) : null;
-    const partner = this.findSocialPartner(villager, namedTarget);
+    let partner = this.findSocialPartner(villager, namedTarget);
 
-    const socialAction = { ...action, action: CONSTANTS.ACTIVITY.SOCIALIZING };
+    // Conflict-seeking villagers prefer argue when paired with a rival
+    let interactionType = action.interactionType || 'talk';
+    if (this.socialSystem?.isConflictSeeking(villager) && partner) {
+      const bond = villager.getRelationship(partner);
+      if (bond <= (CONSTANTS.RELATIONSHIP.RIVAL_THRESHOLD ?? -25) && !action.interactionType) {
+        interactionType = 'argue';
+      }
+    }
+
+    const socialAction = { ...action, action: CONSTANTS.ACTIVITY.SOCIALIZING, interactionType };
     delete socialAction.moveTo;
     villager.applyAction(socialAction);
     this.beginSocializing(villager, partner);
@@ -304,34 +302,29 @@ class Game {
     const dist = Utils.distance(villager.x, villager.y, partner.x, partner.y);
     if (dist > this.getSocialRange()) return { handled: true };
 
-    const relChange = action.interactionType === 'argue' ? -5 : 3;
-    villager.modifyRelationship(partner.id, relChange);
-    partner.modifyRelationship(villager.id, relChange);
+    let notable = null;
+    if (this.socialSystem) {
+      const result = this.socialSystem.applyInteractionEffects(villager, partner, interactionType);
+      notable = result.notable;
+    } else {
+      const relChange = interactionType === 'argue' ? -5 : 3;
+      villager.modifyRelationship(partner.id, relChange);
+      partner.modifyRelationship(villager.id, relChange);
+    }
 
     // Sharing confidences can uncover secrets during socializing
-    if (action.interactionType === 'share' || action.interactionType === 'help') {
+    if (interactionType === 'share' || interactionType === 'help') {
       this.tryDiscoverSecretThroughSocializing(villager, partner, 'shared_confidence');
       this.tryDiscoverSecretThroughSocializing(partner, villager, 'shared_confidence');
-    } else if (action.interactionType === 'romance') {
+    } else if (interactionType === 'romance') {
       this.tryDiscoverSecretThroughSocializing(villager, partner, 'high_relationship');
       this.tryDiscoverSecretThroughSocializing(partner, villager, 'high_relationship');
     }
 
-    // Geographic place rumors travel with talk/share/help
-    if (['share', 'talk', 'help', 'gossip'].includes(action.interactionType || 'talk')) {
+    // Geographic place rumors travel with talk/share/help/gossip
+    if (['share', 'talk', 'help', 'gossip'].includes(interactionType || 'talk')) {
       this.trySharePlaceKnowledge(villager, partner);
       this.trySharePlaceKnowledge(partner, villager);
-    }
-
-    let notable = null;
-    if (action.interactionType === 'argue') {
-      notable = { text: `${villager.name} and ${partner.name} had a disagreement.`, type: 'conflict' };
-    } else if (action.interactionType === 'share') {
-      notable = { text: `${villager.name} shared something with ${partner.name}.`, type: 'normal' };
-    } else if (action.interactionType === 'romance') {
-      notable = { text: `${villager.name} and ${partner.name} shared a tender moment.`, type: 'celebration' };
-    } else if (action.interactionType === 'help') {
-      notable = { text: `${villager.name} helped ${partner.name} with a task.`, type: 'normal' };
     }
 
     return { handled: true, notable };
@@ -548,34 +541,20 @@ class Game {
       winningVillage.villagerIds.push(v.id);
     });
 
-    // Clear enemy relationship entries by villager identity (id keys; migrate name keys)
-    const losingIds = new Set(losingVillagers.map(v => v.id));
-    const losingNames = new Set(losingVillagers.map(v => v.name));
+    // Preserve relationships with conquest trauma instead of wiping keys (Phase 5)
     const winningRoster = this.getVillagersForVillage(winningVillageId);
-    winningRoster.forEach(wv => {
-      if (!wv.relationships) return;
-      for (const id of losingIds) {
-        if (wv.relationships[id] !== undefined && priorWinningIds.has(wv.id)) {
-          delete wv.relationships[id];
+    const winningPrior = winningRoster.filter(v => priorWinningIds.has(v.id));
+    if (this.socialSystem) {
+      this.socialSystem.applyConquestMemory(winningPrior, losingVillagers);
+    } else {
+      const losingIds = new Set(losingVillagers.map(v => v.id));
+      winningPrior.forEach(wv => {
+        if (!wv.relationships) return;
+        for (const id of losingIds) {
+          if (wv.relationships[id] !== undefined) delete wv.relationships[id];
         }
-      }
-      for (const name of losingNames) {
-        if (wv.relationships[name] !== undefined && priorWinningIds.has(wv.id)) {
-          delete wv.relationships[name];
-        }
-      }
-      if (!priorWinningIds.has(wv.id)) {
-        for (const other of winningRoster) {
-          if (!priorWinningIds.has(other.id)) continue;
-          if (wv.relationships[other.id] !== undefined) {
-            delete wv.relationships[other.id];
-          }
-          if (wv.relationships[other.name] !== undefined) {
-            delete wv.relationships[other.name];
-          }
-        }
-      }
-    });
+      });
+    }
 
     // Transfer structures
     losingVillage.structureIds.forEach(structureId => {
@@ -1135,13 +1114,14 @@ class Game {
     return false;
   }
 
-  // Economy / raid / exploration systems once villages exist
+  // Economy / raid / exploration / social systems once villages exist
   ensureVillageSystems() {
     this.economy = new Economy(this);
     this.raidSystem = new RaidSystem(this);
     this.diplomacySystem = new DiplomacySystem(this);
     this.explorationSystem = new ExplorationSystem(this);
     this.placeMemory = new PlaceMemorySystem(this);
+    this.socialSystem = new SocialSystem(this);
   }
 
   newWorld() {
@@ -1877,10 +1857,13 @@ class Game {
       }
     }
 
-    // Gossip and secret discovery (secrets must be exercised beyond affairs alone)
+    // Gossip, secret discovery, place rumors, cliques, folk diplomacy
     this.processSecretDiscoveries();
     this.processGossipSpread();
     this.processPlaceGossip();
+    if (this.socialSystem?.onNewDay) {
+      this.socialSystem.onNewDay();
+    }
   }
 
   applySeasonalDailyEffects() {
@@ -2033,9 +2016,13 @@ class Game {
         break;
       case CONSTANTS.SECRET.PAST_BETRAYAL:
         owner.mood = Math.max(-100, owner.mood - 10);
-        if (target) this.modifyMutualRelationship(owner, target, -18);
+        // Directed: owner and target resent each other asymmetrically
+        if (target) {
+          this.modifyDirectedRelationship(owner, target, -18);
+          this.modifyDirectedRelationship(target, owner, -10);
+        }
         if (discoverer && target && discoverer.id !== target.id) {
-          this.modifyMutualRelationship(discoverer, owner, -4);
+          this.modifyDirectedRelationship(discoverer, owner, -4);
         }
         break;
       case CONSTANTS.SECRET.HIDDEN_STASH: {
@@ -2045,7 +2032,7 @@ class Game {
           const foodGain = Utils.randomInt(2, 5);
           village.resources.food = (village.resources.food || 0) + foodGain;
         }
-        if (discoverer) this.modifyMutualRelationship(owner, discoverer, -3);
+        if (discoverer) this.modifyDirectedRelationship(discoverer, owner, -3);
         break;
       }
       case CONSTANTS.SECRET.ILLNESS:
@@ -2058,16 +2045,17 @@ class Game {
         if (discoverer) this.modifyMutualRelationship(owner, discoverer, 5);
         break;
       case CONSTANTS.SECRET.GRUDGE:
-        if (target) this.modifyMutualRelationship(owner, target, -8);
+        if (target) this.modifyDirectedRelationship(owner, target, -8);
         if (discoverer && target && discoverer.id === target.id) {
           discoverer.mood = Math.max(-100, discoverer.mood - 6);
+          this.modifyDirectedRelationship(discoverer, owner, -5);
         }
         break;
       case CONSTANTS.SECRET.FORBIDDEN_ROMANCE:
         owner.mood = Math.max(-100, owner.mood - 8);
         break;
       default:
-        if (discoverer) this.modifyMutualRelationship(owner, discoverer, 1);
+        if (discoverer) this.modifyDirectedRelationship(discoverer, owner, 1);
         break;
     }
 
@@ -2085,47 +2073,42 @@ class Game {
   }
 
   async processGossipSpread() {
+    if (this.socialSystem?.processGossipSpread) {
+      await this.socialSystem.processGossipSpread();
+      return;
+    }
+    // Minimal fallback if social system unavailable
     for (const owner of this.villagers) {
       for (const secret of (owner.secrets || [])) {
-        if (!secret.revealed) continue;
-
+        if (!secret.revealed || secret.publicKnowledge) continue;
         const discovered = secret.discoveredBy || [];
-        const knowers = [owner, ...discovered
-          .map(key => this.villagers.find(v => v.id === key || v.name === key))
-          .filter(Boolean)];
-
-        // Gossip stays inside the tribe that owns the secret
         const candidates = this.getVillagersForVillage(owner.villageId).filter(v => {
           if (v.id === owner.id) return false;
           if ((v.personality?.sociable || 0) < 45) return false;
           if (discovered.includes(v.id) || discovered.includes(v.name)) return false;
-          if (knowers.some(k => k.id === v.id)) return false;
           return true;
         });
         if (candidates.length === 0) continue;
-
-        // Chance to spread each day; pick 1–2 sociable listeners
         if (Utils.randomFloat(0, 1) > 0.45) continue;
-
-        const count = Utils.randomInt(1, Math.min(2, candidates.length));
-        const listeners = Utils.shuffle(candidates).slice(0, count);
+        const listener = Utils.randomElement(candidates);
         if (!secret.discoveredBy) secret.discoveredBy = [];
-        const spreader = Utils.randomElement(knowers) || owner;
+        secret.discoveredBy.push(listener.id);
+      }
+    }
+  }
 
-        for (const listener of listeners) {
-          secret.discoveredBy.push(listener.id);
-          let gossipText = null;
-          try {
-            gossipText = await llm.generateGossip(secret, spreader, owner);
-          } catch (e) {
-            gossipText = null;
-          }
-          if (!gossipText) {
-            gossipText = `${spreader.name} shares whispers about ${owner.name} with ${listener.name}.`;
-          }
-          listener.showSpeechBubble?.('🗣️', Utils.truncate(gossipText, 40), 5000);
-          this.addChronicleEntry(gossipText, 'normal', owner.villageId);
-        }
+  deepenDailyRelationships() {
+    if (this.socialSystem) {
+      this.socialSystem.deepenDailyRelationships();
+      return;
+    }
+    // Legacy symmetric deepen fallback
+    for (let i = 0; i < this.villagers.length; i++) {
+      for (let j = i + 1; j < this.villagers.length; j++) {
+        const a = this.villagers[i];
+        const b = this.villagers[j];
+        if (!this.canVillagersSocialize(a, b)) continue;
+        this.modifyMutualRelationship(a, b, 0.25);
       }
     }
   }
@@ -2179,34 +2162,6 @@ class Game {
     // Keep this hook for chronicle/ritual on stage changes that may have been missed.
   }
 
-  deepenDailyRelationships() {
-    for (let i = 0; i < this.villagers.length; i++) {
-      for (let j = i + 1; j < this.villagers.length; j++) {
-        const a = this.villagers[i];
-        const b = this.villagers[j];
-        if (!this.canVillagersSocialize(a, b)) continue;
-        if (this.areCloseFamily(a, b)) {
-          this.modifyMutualRelationship(a, b, 0.6);
-          continue;
-        }
-
-        let delta = 0.25;
-        if (a.partnerId === b.id || b.partnerId === a.id) delta += 1.2;
-        if (Utils.distance(a.x, a.y, b.x, b.y) <= 5) delta += 0.45;
-        if (a.status === CONSTANTS.ACTIVITY.SOCIALIZING || b.status === CONSTANTS.ACTIVITY.SOCIALIZING) delta += 0.55;
-
-        const empathy = ((a.personality?.empathetic || 50) + (b.personality?.empathetic || 50)) / 2;
-        const sociable = ((a.personality?.sociable || 50) + (b.personality?.sociable || 50)) / 2;
-        delta += (empathy - 50) / 80 + (sociable - 50) / 100;
-
-        if (a.mood < -20 || b.mood < -20) delta -= 0.8;
-        if (a.hunger < 25 || b.hunger < 25 || (a.thirst ?? 100) < 25 || (b.thirst ?? 100) < 25) delta -= 0.7;
-
-        this.modifyMutualRelationship(a, b, delta);
-      }
-    }
-  }
-
   processPartnerships() {
     if (!this.isVillageStableForFamilyGrowth(false)) return;
 
@@ -2217,6 +2172,7 @@ class Game {
         const b = adults[j];
         if (a.partnerId || b.partnerId || this.areCloseFamily(a, b)) continue;
         if (!this.areSameTribe(a, b)) continue;
+        if (this.socialSystem?.hasWarRomanceCooldown(a, b)) continue;
 
         const relationship = this.getMutualRelationship(a, b);
         if (relationship < CONSTANTS.RELATIONSHIP.FRIEND_THRESHOLD + 15) continue;
@@ -2461,8 +2417,33 @@ class Game {
 
   modifyMutualRelationship(a, b, delta) {
     if (!Number.isFinite(delta) || delta === 0) return;
+    if (this.socialSystem) {
+      this.socialSystem.modifyMutual(a, b, delta);
+      return;
+    }
     a.modifyRelationship(b, delta);
     b.modifyRelationship(a, delta);
+  }
+
+  modifyDirectedRelationship(from, to, delta) {
+    if (this.socialSystem) {
+      this.socialSystem.modifyDirected(from, to, delta);
+      return;
+    }
+    from.modifyRelationship(to, delta);
+  }
+
+  getBondSummary(a, b) {
+    if (this.socialSystem) return this.socialSystem.getBondSummary(a, b);
+    const aToB = a.getRelationship(b);
+    const bToA = b.getRelationship(a);
+    return {
+      aToB,
+      bToA,
+      mutual: (aToB + bToA) / 2,
+      typeA: a.getRelationshipType(aToB),
+      typeB: b.getRelationshipType(bToA)
+    };
   }
 
   areCloseFamily(a, b) {
@@ -2664,6 +2645,21 @@ class Game {
   }
 
   pursueRelationshipGoal(villager, goal) {
+    // Status/prestige social goals complete when respected enough (Phase 6)
+    const prestigeGoal = goal.type === 'social' &&
+      /respect|elder|status|prestige|leader/i.test(goal.description || '');
+    const prestigeTarget = CONSTANTS.RELATIONSHIP.PRESTIGE_SOCIAL_GOAL ?? 70;
+    if (prestigeGoal && (villager.prestige ?? 0) >= prestigeTarget) {
+      goal.progress = 100;
+      this.advanceGoal(villager, goal, 0, 'Earned the village\'s respect');
+      return;
+    }
+    if (prestigeGoal) {
+      villager.prestige = Utils.clamp((villager.prestige ?? 25) + 1, 0, 100);
+      this.advanceGoal(villager, goal, 4, 'Building standing in the tribe');
+      return;
+    }
+
     const target = this.resolveGoalTargetVillager(villager, goal);
     if (!target) {
       this.advanceGoal(villager, goal, 3, 'Reflecting on village bonds');
@@ -2675,8 +2671,9 @@ class Game {
     villager.currentAction = { action: CONSTANTS.ACTIVITY.SOCIALIZING, goalId: goal.id, goalDescription: goal.description };
     const inRange = Utils.distance(villager.x, villager.y, target.x, target.y) <= this.getSocialRange();
     if (inRange) {
-      villager.modifyRelationship(target.name, 2);
-      target.modifyRelationship(villager.name, 1);
+      this.modifyDirectedRelationship(villager, target, 2);
+      this.modifyDirectedRelationship(target, villager, 1);
+      this.socialSystem?.recordMutualContact(villager, target);
       villager.addInteraction('talk', target.name, `Worked on personal goal: ${goal.description}`);
       villager.showSpeechBubble('💬', `Talking with ${target.name}`, 3500);
     } else {
@@ -4227,7 +4224,7 @@ Respond with JSON: {
     }
 
     // Funeral ritual
-    this.performRitual(CONSTANTS.RITUAL.FUNERAL, villager.villageId);
+    this.performRitual(CONSTANTS.RITUAL.FUNERAL, villager.villageId, villager);
   }
 
   // Remove villager without funeral (for raids, conquest, etc.)
@@ -4336,15 +4333,14 @@ Respond with JSON: {
     const unfaithfulSecret = unfaithful.secrets.find(s => s.type === 'forbidden_romance' && !s.revealed);
     if (unfaithfulSecret) {
       unfaithfulSecret.revealed = true;
-      unfaithfulSecret.discoveredBy.push(spouse.name);
+      unfaithfulSecret.discoveredBy.push(spouse.id);
     }
 
-    // Massive relationship damage between spouse and unfaithful
-    spouse.relationships[unfaithful.id] = Math.max(-100, spouse.getRelationship(unfaithful) - 50);
-    unfaithful.relationships[spouse.id] = Math.max(-100, unfaithful.getRelationship(spouse) - 50);
-
-    // Moderate relationship damage with affair partner (jealousy)
-    spouse.relationships[affairPartner.id] = Math.max(-100, spouse.getRelationship(affairPartner) - 30);
+    // Directed jealousy: spouse hates unfaithful/rival more than the reverse
+    this.modifyDirectedRelationship(spouse, unfaithful, -50);
+    this.modifyDirectedRelationship(unfaithful, spouse, -25);
+    this.modifyDirectedRelationship(spouse, affairPartner, -40);
+    this.modifyDirectedRelationship(affairPartner, spouse, -5);
 
     // Mood penalties
     spouse.mood = Math.max(-100, spouse.mood - 20);
@@ -4464,9 +4460,43 @@ Respond with JSON: {
     }
   }
 
-  async performRitual(ritualDef, villageId = null) {
+  async performRitual(ritualDef, villageId = null, deceased = null) {
     if (!ritualDef) return;
 
+    // Phase 6 attendance / shame / funeral bonding via social system
+    if (this.socialSystem?.performRitualWithAttendance) {
+      this.socialSystem.performRitualWithAttendance(ritualDef, villageId, deceased);
+
+      const attendees = this.villagers.filter(v => {
+        if (villageId && v.villageId !== villageId) return false;
+        return v.status !== CONSTANTS.ACTIVITY.SLEEPING && !v.isScouting;
+      });
+      const leader = attendees.find(v => v.isChieftan) || attendees[0];
+      if (!leader || this.benchmarkMode) return;
+
+      let narrative = null;
+      try {
+        narrative = await llm.generateRitualDialogue(ritualDef, leader, attendees);
+      } catch (e) {
+        narrative = null;
+      }
+      const narrationText = typeof narrative === 'string'
+        ? narrative
+        : (narrative?.narration || narrative?.chronicle || null);
+      if (narrationText) {
+        this.addChronicleEntry(
+          `${ritualDef.emoji || ''} ${ritualDef.name}: ${narrationText}`,
+          'celebration',
+          villageId || leader.villageId
+        );
+      }
+      attendees.slice(0, 5).forEach(v => {
+        v.showSpeechBubble(ritualDef.emoji, ritualDef.name);
+      });
+      return;
+    }
+
+    // Legacy ritual path
     let participants = this.villagers.filter(v => {
       if (villageId && v.villageId !== villageId) return false;
       if (ritualDef.participants === 'all') return v.status !== CONSTANTS.ACTIVITY.SLEEPING;
@@ -4475,21 +4505,9 @@ Respond with JSON: {
       }
       return true;
     });
-
     if (participants.length === 0) return;
-
-    if (this.benchmarkMode) {
-      participants.forEach(v => {
-        v.mood = Math.min(100, (v.mood || 0) + (ritualDef.moodBoost || 0));
-      });
-      return;
-    }
-
-    // Apply ritual effects
     participants.forEach(v => {
       v.mood = Math.min(100, v.mood + ritualDef.moodBoost);
-
-      // Social gains
       participants.forEach(other => {
         if (other.id !== v.id) {
           const current = v.getRelationship(other);
@@ -4497,38 +4515,11 @@ Respond with JSON: {
         }
       });
     });
-
-    // Generate ritual narrative and record in chronicle (do not discard)
-    const leader = participants.find(v => v.isChieftan) || participants[0];
-    let narrative = null;
-    try {
-      narrative = await llm.generateRitualDialogue(ritualDef, leader, participants);
-    } catch (e) {
-      narrative = null;
-    }
-
-    const narrationText = typeof narrative === 'string'
-      ? narrative
-      : (narrative?.narration || narrative?.chronicle || null);
-    const chant = typeof narrative === 'object' ? narrative?.chant : null;
-
-    if (narrationText) {
-      const entry = chant
-        ? `${ritualDef.emoji || ''} ${ritualDef.name}: ${narrationText} "${chant}"`
-        : `${ritualDef.emoji || ''} ${ritualDef.name}: ${narrationText}`;
-      this.addChronicleEntry(entry.trim(), 'celebration', villageId || leader?.villageId);
-    } else {
-      this.addChronicleEntry(
-        `${ritualDef.emoji || ''} The village holds a ${ritualDef.name}.`,
-        'celebration',
-        villageId || leader?.villageId
-      );
-    }
-
-    // Show speech bubbles
-    participants.slice(0, 5).forEach(v => {
-      v.showSpeechBubble(ritualDef.emoji, ritualDef.name);
-    });
+    this.addChronicleEntry(
+      `${ritualDef.emoji || ''} The village holds a ${ritualDef.name}.`,
+      'celebration',
+      villageId
+    );
   }
 
   checkDeaths() {
@@ -5293,6 +5284,7 @@ Respond with JSON: {
   async saveGame() {
     const saveData = {
       version: CONSTANTS.VERSION,
+      socialModelVersion: CONSTANTS.RELATIONSHIP.SOCIAL_MODEL_VERSION ?? 2,
       world: this.world.serialize(),
       villagers: this.villagers.map(v => v.serialize()),
       villages: this.villages.map(v => v.serialize()),
