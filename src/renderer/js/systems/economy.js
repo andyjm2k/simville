@@ -284,6 +284,64 @@ class Economy {
       fromVillage.resources[key] = 0;
     }
   }
+
+  /**
+   * Estimate daily food/water burn from need decay and eat/drink conversion.
+   * Used so the LLM can plan by days-of-cover instead of raw stockpile counts.
+   * @param {number} population
+   * @returns {{ foodPerDay: number, waterPerDay: number }}
+   */
+  estimateDailyBurn(population = 1) {
+    // Hunger decays 5/hour → ~120/day; ~25 hunger restored per 1 food
+    const pop = Math.max(1, population);
+    const foodPerDay = Math.max(1, Math.ceil((pop * 120) / 25));
+    // Thirst decays 7/hour → ~168/day; ~35 thirst restored per 1 water
+    const waterPerDay = Math.max(1, Math.ceil((pop * 168) / 35));
+    return { foodPerDay, waterPerDay };
+  }
+
+  /**
+   * Build a compact resource-pressure briefing for LLM action prompts.
+   * @param {string|null} villageId
+   * @param {number} population
+   * @returns {object}
+   */
+  getResourcePressure(villageId = null, population = 1) {
+    const resources = this.getResources(villageId);
+    const burn = this.estimateDailyBurn(population);
+    const food = resources.food || 0;
+    const water = resources.water || 0;
+    const foodDays = Math.round((food / burn.foodPerDay) * 10) / 10;
+    const waterDays = Math.round((water / burn.waterPerDay) * 10) / 10;
+
+    // Band labels steer the LLM without a rules engine forcing labor
+    const bandFor = (days) => {
+      if (days < 2) return 'crisis';
+      if (days < 5) return 'tight';
+      if (days < 10) return 'stable';
+      return 'surplus';
+    };
+
+    const materialShortfalls = [];
+    const materialFloors = { wood: 20, stone: 15, clay: 12, thatch: 12, herbs: 5 };
+    for (const [type, floor] of Object.entries(materialFloors)) {
+      if ((resources[type] || 0) < floor) {
+        materialShortfalls.push(`${type}<${floor}`);
+      }
+    }
+
+    return {
+      food,
+      water,
+      foodDays,
+      waterDays,
+      foodBand: bandFor(foodDays),
+      waterBand: bandFor(waterDays),
+      dailyBurn: burn,
+      materialShortfalls,
+      seasonHint: this.game?.timeState?.season?.name || null
+    };
+  }
 }
 
 // Node / browser export

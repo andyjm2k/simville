@@ -100,4 +100,25 @@ describe('Economy', () => {
     expect(village.resources.food).toBe(40);
     expect(village.resources.wood).toBe(9);
   });
+
+  it('estimates daily burn and resource pressure bands for LLM planning', () => {
+    const village = new Village({
+      id: 'press',
+      resources: { ...economy.getDefaultResources(), food: 12, water: 6, wood: 5 }
+    });
+    gameStub.villages = [village];
+    gameStub.timeState = { season: { name: 'Dry Season' } };
+
+    const burn = economy.estimateDailyBurn(4);
+    expect(burn.foodPerDay).toBeGreaterThan(0);
+    expect(burn.waterPerDay).toBeGreaterThan(0);
+
+    const pressure = economy.getResourcePressure('press', 4);
+    expect(pressure.food).toBe(12);
+    expect(pressure.water).toBe(6);
+    expect(['crisis', 'tight', 'stable', 'surplus']).toContain(pressure.foodBand);
+    expect(['crisis', 'tight', 'stable', 'surplus']).toContain(pressure.waterBand);
+    expect(pressure.materialShortfalls.some((s) => s.startsWith('wood'))).toBe(true);
+    expect(pressure.seasonHint).toBe('Dry Season');
+  });
 });

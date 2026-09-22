@@ -16,9 +16,13 @@ describe('QA: villager needs arbitration', () => {
     const villager = game.villagers[0];
     villager.status = CONSTANTS.ACTIVITY.WORKING;
     villager.activity = 'Crafting tools';
-    villager.hunger = 30;
+    villager.activityDuration = 0;
+    villager.needInterruptCooldown = 0;
+    // Below CRITICAL_HUNGER — local reflex only; mild hunger is LLM-owned
+    villager.hunger = (CONSTANTS.NEED.CRITICAL_HUNGER ?? 25) - 5;
     villager.thirst = 90;
     villager.energy = 90;
+    game.getResources(villager.villageId).food = 10;
 
     villager.updateStatus();
 
@@ -29,14 +33,33 @@ describe('QA: villager needs arbitration', () => {
   it('forces drinking when thirst is critically low', () => {
     const villager = game.villagers[0];
     villager.status = CONSTANTS.ACTIVITY.SOCIALIZING;
+    villager.activityDuration = 0;
+    villager.needInterruptCooldown = 0;
     villager.hunger = 90;
-    villager.thirst = 25;
+    villager.thirst = (CONSTANTS.NEED.CRITICAL_THIRST ?? 25) - 5;
     villager.energy = 90;
+    game.getResources(villager.villageId).water = 10;
 
     villager.updateStatus();
 
     expect([CONSTANTS.ACTIVITY.DRINKING, CONSTANTS.ACTIVITY.GATHERING])
       .toContain(villager.status);
+  });
+
+  it('does not auto-eat on mild hunger so the LLM can keep persona work', () => {
+    const villager = game.villagers[0];
+    villager.status = CONSTANTS.ACTIVITY.WORKING;
+    villager.activity = 'Crafting tools';
+    villager.activityDuration = 5000;
+    villager.needInterruptCooldown = 0;
+    villager.hunger = 40;
+    villager.thirst = 90;
+    villager.energy = 90;
+    game.getResources(villager.villageId).food = 20;
+
+    villager.updateStatus();
+
+    expect(villager.status).toBe(CONSTANTS.ACTIVITY.WORKING);
   });
 
   it('seeks company when social need is critically low', () => {

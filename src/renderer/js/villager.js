@@ -305,11 +305,13 @@ class Villager {
       this.socialPartnerId = null;
     }
 
-    const criticalHunger = this.hunger < 25;
-    const criticalThirst = this.thirst < 25;
+    // Critical thresholds only — mild hunger/thirst/energy are LLM resource decisions
+    const criticalHunger = this.hunger < (CONSTANTS.NEED.CRITICAL_HUNGER ?? 25);
+    const criticalThirst = this.thirst < (CONSTANTS.NEED.CRITICAL_THIRST ?? 25);
+    const criticalEnergy = this.energy < (CONSTANTS.NEED.CRITICAL_ENERGY ?? 15);
 
     // Keep scouts on mission unless they are starving or collapsing
-    if (this.isScouting && !criticalHunger && !criticalThirst && this.energy >= 20) {
+    if (this.isScouting && !criticalHunger && !criticalThirst && !criticalEnergy) {
       this.status = CONSTANTS.ACTIVITY.SCOUTING;
       return;
     }
@@ -327,46 +329,50 @@ class Villager {
     const midDurationWork = this.activityDuration > 0 && busyWorkStatuses.includes(this.status);
 
     // Don't clobber mid-duration LLM/work unless critically hungry/thirsty
-    if (midDurationWork && !criticalHunger && !criticalThirst) {
+    if (midDurationWork && !criticalHunger && !criticalThirst && !criticalEnergy) {
       return;
     }
 
     // Cooldown after interrupting LLM work for needs
-    if (this.needInterruptCooldown > 0 && !criticalHunger && !criticalThirst) {
+    if (this.needInterruptCooldown > 0 && !criticalHunger && !criticalThirst && !criticalEnergy) {
       return;
     }
 
     const resources = game?.getResources?.(this.villageId) || game?.resources || {};
 
-    if (this.thirst < 70 && (resources.water || 0) > 0) {
+    // Local reflex: drink only when critically dehydrated and stores exist
+    if (criticalThirst && (resources.water || 0) > 0) {
       if (midDurationWork) this.needInterruptCooldown = 30000;
       this.status = CONSTANTS.ACTIVITY.DRINKING;
-      this.activity = 'Drinking from village water stores';
+      this.activity = 'Desperate for water';
       return;
     }
 
-    if (this.hunger < 65 && (resources.food || 0) > 0) {
+    // Local reflex: eat only when critically starving and stores exist
+    if (criticalHunger && (resources.food || 0) > 0) {
       if (midDurationWork) this.needInterruptCooldown = 30000;
       this.status = CONSTANTS.ACTIVITY.EATING;
-      this.activity = 'Eating from the village stores';
+      this.activity = 'Desperate for food';
       return;
     }
 
-    if (this.energy < 20) {
+    // Local reflex: rest only when collapsing
+    if (criticalEnergy) {
       if (midDurationWork) this.needInterruptCooldown = 30000;
       this.status = CONSTANTS.ACTIVITY.RESTING;
-      this.activity = 'Exhausted, needs rest';
+      this.activity = 'Collapsing from exhaustion';
       return;
     }
 
-    if (this.thirst < 20) {
+    // No stores left — seek water/food; LLM normally prevents reaching this state
+    if (criticalThirst) {
       if (midDurationWork) this.needInterruptCooldown = 30000;
       this.status = CONSTANTS.ACTIVITY.GATHERING;
       this.activity = 'Very thirsty, seeking water';
       return;
     }
 
-    if (this.hunger < 20) {
+    if (criticalHunger) {
       if (midDurationWork) this.needInterruptCooldown = 30000;
       this.status = CONSTANTS.ACTIVITY.GATHERING;
       this.activity = 'Very hungry, seeking food';
