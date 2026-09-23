@@ -25,34 +25,39 @@ describe('Social dynamics plan', () => {
 
   it('Phase 1: typed interaction deltas differ by type', () => {
     const { a, b } = tribePair();
+    // Isolate typed deltas from partner routing / range / secret side effects.
+    // Coverage runs were flaking when applySocialVillagerAction skipped effects
+    // (out-of-range or busy partner), leaving both help and talk at +0.
+    a.x = b.x = 32;
+    a.y = b.y = 32;
+    a.health = b.health = 100;
+    a.energy = b.energy = 80;
+    a.hunger = b.hunger = 80;
+    a.thirst = b.thirst = 80;
+    a.status = b.status = CONSTANTS.ACTIVITY.IDLE;
+    a.currentAction = b.currentAction = null;
+    a.isScouting = b.isScouting = false;
+    a.secrets = [];
+    b.secrets = [];
+    a.socialPartnerId = null;
+    b.socialPartnerId = null;
+
     a.relationships[b.id] = 10;
     b.relationships[a.id] = 10;
-
-    game.applySocialVillagerAction(a, {
-      action: CONSTANTS.ACTIVITY.SOCIALIZING,
-      interactionType: 'help',
-      interactionTarget: b.name
-    });
+    const help = game.socialSystem.applyInteractionEffects(a, b, 'help');
     const afterHelp = a.getRelationship(b);
 
     a.relationships[b.id] = 10;
     b.relationships[a.id] = 10;
-    game.applySocialVillagerAction(a, {
-      action: CONSTANTS.ACTIVITY.SOCIALIZING,
-      interactionType: 'talk',
-      interactionTarget: b.name
-    });
+    const talk = game.socialSystem.applyInteractionEffects(a, b, 'talk');
     const afterTalk = a.getRelationship(b);
 
     a.relationships[b.id] = 10;
     b.relationships[a.id] = 10;
-    game.applySocialVillagerAction(a, {
-      action: CONSTANTS.ACTIVITY.SOCIALIZING,
-      interactionType: 'argue',
-      interactionTarget: b.name
-    });
+    game.socialSystem.applyInteractionEffects(a, b, 'argue');
     const afterArgue = a.getRelationship(b);
 
+    expect(help.delta).toBeGreaterThan(talk.delta);
     expect(afterHelp - 10).toBeGreaterThan(afterTalk - 10);
     expect(afterArgue).toBeLessThan(10);
     expect(a.lastSocialContact[b.id]).toBe(game.timeState.day);

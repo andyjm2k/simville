@@ -2994,7 +2994,18 @@ class Game {
       territoryRadius: village.territoryRadius,
       rivalVillage: rivalInfo,
       landmarks: this.placeMemory?.summarizeLandmarks(village) || [],
-      knownResources: this.placeMemory?.summarizeKnownResources(village) || []
+      knownResources: this.placeMemory?.summarizeKnownResources(village) || [],
+      // Pressure briefing + active edicts so the LLM owns resource strategy
+      resourcePressure: this.economy?.getResourcePressure?.(
+        village.id,
+        this.getVillagersForVillage(village.id).length
+      ) || null,
+      activeDirectives: this.getActiveRules(village.id).map(rule => ({
+        title: rule.title,
+        edict: rule.edict,
+        effect: rule.effect,
+        category: rule.category
+      }))
     };
   }
 
@@ -3017,49 +3028,9 @@ class Game {
       const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
       if (!villager) continue;
 
-      const hasCriticalNeeds = villager.hunger < 30 || (villager.thirst ?? 100) < 30 || villager.energy < 15;
-      if (villager.isScouting && !hasCriticalNeeds) continue;
-      const isSurvivalAction = action.action === CONSTANTS.ACTIVITY.EATING ||
-        action.action === CONSTANTS.ACTIVITY.DRINKING ||
-        action.action === CONSTANTS.ACTIVITY.GATHERING ||
-        action.action === CONSTANTS.ACTIVITY.RESTING ||
-        action.action === CONSTANTS.ACTIVITY.SLEEPING ||
-        action.action === CONSTANTS.ACTIVITY.HUNTING ||
-        action.action === CONSTANTS.ACTIVITY.FISHING;
-
-      if (hasCriticalNeeds && !isSurvivalAction) {
-        const villageResources = this.getResources(villager.villageId);
-        if ((villager.thirst ?? 100) < 30 && villageResources.water > 0) {
-          villager.status = CONSTANTS.ACTIVITY.DRINKING;
-          villager.activity = 'Desperate for water';
-          continue;
-        }
-        if (villager.hunger < 30 && villageResources.food > 0) {
-          villager.status = CONSTANTS.ACTIVITY.EATING;
-          villager.activity = 'Desperate for food';
-          continue;
-        }
-        if (villager.energy < 15) {
-          villager.status = CONSTANTS.ACTIVITY.RESTING;
-          villager.activity = 'Collapsing from exhaustion';
-          continue;
-        }
-        continue;
-      }
-
-      const villageResources = this.getResources(villager.villageId);
-      if ((villager.thirst ?? 100) < 35 && villageResources.water > 0) {
-        villager.status = CONSTANTS.ACTIVITY.DRINKING;
-        villager.activity = 'Drinking from village water stores';
-        applied += 1;
-        continue;
-      }
-      if (villager.hunger < 35 && villageResources.food > 0) {
-        villager.status = CONSTANTS.ACTIVITY.EATING;
-        villager.activity = 'Eating from the village stores';
-        applied += 1;
-        continue;
-      }
+      // Critical collapse only — mild needs stay under LLM/persona control
+      if (this.applyCriticalNeedReflex(villager, action)) continue;
+      if (villager.isScouting && !this.hasCriticalNeeds(villager)) continue;
 
       const socialResult = this.applySocialVillagerAction(villager, action);
       if (socialResult) {
@@ -3097,6 +3068,80 @@ class Game {
     }
 
     return applied;
+  }
+
+  /**
+   * True when an LLM endpoint is configured — resource labor is LLM-owned.
+   * Offline play keeps the rules-engine survival assigners.
+   * @returns {boolean}
+   */
+  usesLlmResourceDecisions() {
+    return Boolean(llm?.config?.llm?.endpoint);
+  }
+
+  /**
+   * Critical need check aligned with CONSTANTS.NEED critical floors.
+   * @param {object} villager
+   * @returns {boolean}
+   */
+  hasCriticalNeeds(villager) {
+    if (!villager) return false;
+    return villager.hunger < (CONSTANTS.NEED.CRITICAL_HUNGER ?? 25) ||
+      (villager.thirst ?? 100) < (CONSTANTS.NEED.CRITICAL_THIRST ?? 25) ||
+      villager.energy < (CONSTANTS.NEED.CRITICAL_ENERGY ?? 15);
+  }
+
+  /**
+   * True when the proposed action already addresses survival.
+   * @param {object} action
+   * @returns {boolean}
+   */
+  isSurvivalAction(action) {
+    const a = action?.action;
+    return a === CONSTANTS.ACTIVITY.EATING ||
+      a === CONSTANTS.ACTIVITY.DRINKING ||
+      a === CONSTANTS.ACTIVITY.GATHERING ||
+      a === CONSTANTS.ACTIVITY.RESTING ||
+      a === CONSTANTS.ACTIVITY.SLEEPING ||
+      a === CONSTANTS.ACTIVITY.HUNTING ||
+      a === CONSTANTS.ACTIVITY.FISHING;
+  }
+
+  /**
+   * Last-resort local override when the LLM assigns a non-survival action
+   * to a collapsing villager. Returns true if the LLM action was discarded.
+   * @param {object} villager
+   * @param {object} action
+   * @param {{ showBubble?: boolean }} options
+   * @returns {boolean}
+   */
+  applyCriticalNeedReflex(villager, action, options = {}) {
+    if (!this.hasCriticalNeeds(villager)) return false;
+    if (this.isSurvivalAction(action)) return false;
+
+    const showBubble = options.showBubble === true;
+    const villageResources = this.getResources(villager.villageId);
+
+    if ((villager.thirst ?? 100) < (CONSTANTS.NEED.CRITICAL_THIRST ?? 25) && villageResources.water > 0) {
+      villager.status = CONSTANTS.ACTIVITY.DRINKING;
+      villager.activity = 'Desperate for water';
+      if (showBubble) villager.showSpeechBubble('💧', 'Needs water!');
+      return true;
+    }
+    if (villager.hunger < (CONSTANTS.NEED.CRITICAL_HUNGER ?? 25) && villageResources.food > 0) {
+      villager.status = CONSTANTS.ACTIVITY.EATING;
+      villager.activity = 'Desperate for food';
+      if (showBubble) villager.showSpeechBubble('🍖', 'Needs food!');
+      return true;
+    }
+    if (villager.energy < (CONSTANTS.NEED.CRITICAL_ENERGY ?? 15)) {
+      villager.status = CONSTANTS.ACTIVITY.RESTING;
+      villager.activity = 'Collapsing from exhaustion';
+      if (showBubble) villager.showSpeechBubble('😫', 'Needs rest!');
+      return true;
+    }
+    // Critically needy with empty stores — skip non-survival LLM pick
+    return true;
   }
 
   async runHeadlessTick(deltaTime) {
@@ -3273,58 +3318,9 @@ class Game {
         const action = this.sanitizeVillagerAction(rawAction);
         const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
         if (villager) {
-          const hasCriticalNeeds = villager.hunger < 30 || (villager.thirst ?? 100) < 30 || villager.energy < 15;
-          if (villager.isScouting && !hasCriticalNeeds) continue;
-          // Critical needs override: if villager is starving/dehydrated/exhausted,
-          // skip non-survival actions to let them recover
-          const isSurvivalAction = action.action === CONSTANTS.ACTIVITY.EATING ||
-            action.action === CONSTANTS.ACTIVITY.DRINKING ||
-            action.action === CONSTANTS.ACTIVITY.GATHERING ||
-            action.action === CONSTANTS.ACTIVITY.RESTING ||
-            action.action === CONSTANTS.ACTIVITY.SLEEPING ||
-            action.action === CONSTANTS.ACTIVITY.HUNTING ||
-            action.action === CONSTANTS.ACTIVITY.FISHING;
-
-          if (hasCriticalNeeds && !isSurvivalAction) {
-            // Force survival behavior instead of LLM action
-            const villageResources = this.getResources(villager.villageId);
-            if ((villager.thirst ?? 100) < 30 && villageResources.water > 0) {
-              villager.status = CONSTANTS.ACTIVITY.DRINKING;
-              villager.activity = 'Desperate for water';
-              villager.showSpeechBubble('💧', 'Needs water!');
-              continue;
-            }
-            if (villager.hunger < 30 && villageResources.food > 0) {
-              villager.status = CONSTANTS.ACTIVITY.EATING;
-              villager.activity = 'Desperate for food';
-              villager.showSpeechBubble('🍖', 'Needs food!');
-              continue;
-            }
-            if (villager.energy < 15) {
-              villager.status = CONSTANTS.ACTIVITY.RESTING;
-              villager.activity = 'Collapsing from exhaustion';
-              villager.showSpeechBubble('😫', 'Needs rest!');
-              continue;
-            }
-            continue; // Skip LLM action for critically needy villagers
-          }
-
-          {
-            const villageResources = this.getResources(villager.villageId);
-            if ((villager.thirst ?? 100) < 35 && villageResources.water > 0) {
-              villager.status = CONSTANTS.ACTIVITY.DRINKING;
-              villager.activity = 'Drinking from village water stores';
-              villager.showSpeechBubble('💧', 'Drinking');
-              continue;
-            }
-
-            if (villager.hunger < 35 && villageResources.food > 0) {
-              villager.status = CONSTANTS.ACTIVITY.EATING;
-              villager.activity = 'Eating from the village stores';
-              villager.showSpeechBubble('🍖', 'Eating');
-              continue;
-            }
-          }
+          // Critical collapse only — mild needs stay under LLM/persona control
+          if (this.applyCriticalNeedReflex(villager, action, { showBubble: true })) continue;
+          if (villager.isScouting && !this.hasCriticalNeeds(villager)) continue;
 
           const socialResult = this.applySocialVillagerAction(villager, action);
           if (socialResult) {
@@ -3470,6 +3466,10 @@ class Game {
     if (!village) return;
     const villagers = this.getVillagersForVillage(village.id);
     if (villagers.length === 0) return;
+
+    // When an LLM endpoint is configured, villagers decide resource work themselves.
+    // Skip rules-engine labor assignment and emergency stockpile grants.
+    if (this.usesLlmResourceDecisions()) return;
 
     const foodRuleMultiplier = this.hasActiveRuleEffect('food_reserve', village.id) || this.hasActiveRuleEffect('farm_first', village.id) ? 1.45 : 1;
     const waterRuleMultiplier = this.hasActiveRuleEffect('water_priority', village.id) ? 1.45 : 1;
@@ -4088,21 +4088,30 @@ class Game {
 
     try {
       const villageResources = village ? this.getResources(village.id) : this.getHudResources();
+      const pressure = this.economy?.getResourcePressure?.(
+        village?.id,
+        villageVillagers.length
+      );
       const prompt = `The chieftan ${chieftan?.name || 'Kana'} must give guidance to the tribe of ${village?.name || 'the village'}.
 
 Current state:
 - Population: ${villageVillagers.length} villagers
-- Food: ${villageResources.food || 0}
+- Food: ${villageResources.food || 0} (~${pressure?.foodDays ?? '?'} days cover, band=${pressure?.foodBand || 'unknown'})
+- Water: ${villageResources.water || 0} (~${pressure?.waterDays ?? '?'} days cover, band=${pressure?.waterBand || 'unknown'})
 - Wood: ${villageResources.wood || 0}
 - Stone: ${villageResources.stone || 0}
+- Material shortfalls: ${(pressure?.materialShortfalls || []).join(', ') || 'none'}
+- Season: ${this.timeState.season?.name || 'unknown'}
 - Village mood: ${villageVillagers.reduce((sum, v) => sum + v.mood, 0) / Math.max(1, villageVillagers.length)}
 - Day: ${this.timeState.day}
 - Structures: ${village?.structureIds.length || 0}
 - Active rules: ${this.getActiveRules(village?.id).map(rule => `${rule.title}: ${rule.edict}`).join('; ') || 'none'}
 
+Villagers (not a rules engine) will carry out tomorrow's work. Your focus and any rule are guidance that shapes their choices while they stay true to their own personalities. Prefer survival when food/water bands are crisis or tight.
+
 What should the village focus on tomorrow? Choose one:
-- food: if food is low or hunters need motivation
-- building: if new structures are needed
+- food: if food/water cover is tight or hunters need motivation
+- building: if new structures are needed and reserves allow
 - harmony: if social tensions exist or morale is low
 - rest: if villagers are tired
 

@@ -103,7 +103,7 @@ const CONSTANTS = {
     DEEP_DRY: { name: 'Deep Dry', duration: 15, color: '#d0021b', moodMod: -10 }
   },
 
-  // Needs
+  // Needs — critical thresholds are local reflexes; mild needs are LLM-owned
   NEED: {
     HUNGER_DECAY: 5,
     THIRST_DECAY: 7,
@@ -112,7 +112,15 @@ const CONSTANTS = {
     SOCIAL_RECOVERY: 28, // per game hour while socializing in range
     SOCIAL_LONELY: 20,
     SOCIAL_SEEK: 40,
-    SOCIAL_SATISFIED: 75
+    SOCIAL_SATISFIED: 75,
+    // Local code may force eat/drink/rest only at or below these values
+    CRITICAL_HUNGER: 25,
+    CRITICAL_THIRST: 25,
+    CRITICAL_ENERGY: 15,
+    // Prompt guidance: treat needs below these as urgent for the LLM
+    LLM_URGENT_HUNGER: 40,
+    LLM_URGENT_THIRST: 40,
+    LLM_URGENT_ENERGY: 30
   },
 
   // Relationship bounds and social-dynamics balance (SOCIAL_DYNAMICS_PLAN.md)

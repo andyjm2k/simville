@@ -622,12 +622,33 @@ ANOTHER TRIBE is rumored to live somewhere on this continent. You have not made 
 Curious, high-energy villagers SHOULD explore unclaimed wilderness (beyond your ${territoryRadius}-tile home lands, up to ~${exploreRange} tiles from your center) so the tribes can discover each other.
 Do not enter another tribe's claimed land if you find it — report back. Claimed land opens later only through war (conquest) or trade/alliance.`;
 
+    const pressure = worldState.resourcePressure;
+    const pressureBlock = pressure ? `
+RESOURCE PRESSURE (plan by days of cover — you own resource management):
+- Food: ${pressure.food} (~${pressure.foodDays} days, band=${pressure.foodBand}); burn ≈${pressure.dailyBurn?.foodPerDay}/day
+- Water: ${pressure.water} (~${pressure.waterDays} days, band=${pressure.waterBand}); burn ≈${pressure.dailyBurn?.waterPerDay}/day
+- Material shortfalls: ${(pressure.materialShortfalls || []).join(', ') || 'none'}
+- Season: ${pressure.seasonHint || timeState.season.name}
+Bands: crisis(<2d) → prioritize gather/hunt/fish/drink/eat; tight(2–5d) → keep skilled hands on reserves; stable/surplus → persona-driven work, build, scout, socialize.` : '';
+    const directives = worldState.activeDirectives || [];
+    const directiveBlock = directives.length
+      ? `ACTIVE FIRESIDE DIRECTIVES (honor these while staying in character):\n${directives.map(d => `- ${d.title}: ${d.edict} [${d.effect}]`).join('\n')}`
+      : 'ACTIVE FIRESIDE DIRECTIVES: none';
+
+    const urgentHunger = CONSTANTS.NEED?.LLM_URGENT_HUNGER ?? 40;
+    const urgentThirst = CONSTANTS.NEED?.LLM_URGENT_THIRST ?? 40;
+    const urgentEnergy = CONSTANTS.NEED?.LLM_URGENT_ENERGY ?? 30;
+
     const prompt = `Generate actions for each villager in this tribal village simulation.
+
+You are the decision-maker for resource management and daily activity. There is no rules engine assigning gather/hunt/build — village survival depends on your choices. Keep each villager true to their personality, skills, goals, and relationships while ensuring the tribe does not starve or dehydrate.
 
 TIME: Day ${timeState.day}, ${Utils.formatTime(timeState.hours)} (${Utils.getTimeOfDay(timeState.hours)})
 SEASON: ${timeState.season.name} (Day ${timeState.dayInSeason}/${timeState.season.duration})
 TRIBE: ${villageName}
 VILLAGE RESOURCES: Wood=${worldState.resources.wood}, Food=${worldState.resources.food}, Water=${worldState.resources.water}, Stone=${worldState.resources.stone}, Herbs=${worldState.resources.herbs}, Clay=${worldState.resources.clay}, Fish=${worldState.resources.fish || 0}, Thatch=${worldState.resources.thatch || 0}, RareMaterials=${worldState.resources.rareMaterials || 0}
+${pressureBlock}
+${directiveBlock}
 POPULATION: ${villagers.length} villagers (all belong to ${villageName})
 STRUCTURES: ${structureContext}
 LANDMARKS: ${landmarkContext}
@@ -638,10 +659,10 @@ YOUR HOME TERRITORY: ${territoryRadius} tiles (daily work, gathering, and social
 EXPLORATION RANGE: curious villagers may travel up to ~${exploreRange} tiles from center through UNCLAIMED land
 ${rivalBlock}
 
-VILLAGERS (with current positions and known places):
+VILLAGERS (with personality, skills, needs, positions, and known places):
 ${JSON.stringify(villagerSummaries, null, 2)}
 
-Based on each villager's needs, personality, and the time of day, decide what they should do next.
+Decide what each villager should do next. Survival of the tribe is the primary directive; express it through each persona (brave hunters hunt, careful gatherers forage, social villagers rally help, curious ones scout only when reserves allow).
 
 Output JSON with an "actions" array. Each action has:
 - villagerId: string (the villager's id)
@@ -655,18 +676,18 @@ Output JSON with an "actions" array. Each action has:
 - interactionType: talk|argue|share|help|romance|gossip if applicable
 
 Rules:
+- SURVIVAL FIRST: If food or water band is crisis/tight, assign enough gather/hunt/fish/drink/eat work before leisure. Prefer villagers whose skills and personality fit the task.
+- PERSONA: Never treat villagers as interchangeable. Match actions to personality (active→labor, sociable→rally/help, curious→scout when safe, empathetic→care for the needy, confident→lead builds/hunts) and to their skills/goals.
+- PERSONAL NEEDS: If a villager has hunger < ${urgentHunger}, thirst < ${urgentThirst}, or energy < ${urgentEnergy}, prefer eating, drinking, gathering, hunting, fishing, or resting for that villager — expressed in their voice, not as generic idle.
+- DIRECTIVES: When fireside directives are active, bias assignments toward them without ignoring crisis needs or erasing personality.
 - TRIBAL BOUNDARIES: Daily life stays in ${villageName}'s home lands around (${center.x}, ${center.y}). Curious villagers may scout unclaimed wilderness. Foreign claimed land opens ONLY via conquest (war) or trade track (trade/alliance/friendly) — never from discovery alone.
 - PLACE MEMORY: Prefer moveTo toward listed LANDMARKS, tribal KNOWN RESOURCES, and each villager's knownPlaces. Do not invent coordinates outside those lists, home territory, or exploration range. Low-confidence rumors (~) may still be visited to confirm.
-- EXPLORATION: Assign at least one healthy curious villager to scouting/moveTo in unclaimed land between tribes when the other tribe is undiscovered.
+- EXPLORATION: Assign at least one healthy curious villager to scouting/moveTo in unclaimed land between tribes when the other tribe is undiscovered AND food/water are not in crisis.
 - SOCIAL BONDS: Only socialize with villagers from your own tribe listed above. Rival tribes are separate communities.
-- CRITICAL SURVIVAL PRIORITY: If ANY villager has hunger < 40, thirst < 40, or energy < 30, they MUST be assigned eating, drinking, gathering, hunting, fishing, or resting. NEVER assign idle, working, socializing, or building to a villager with critical needs.
 - Movement should be purposeful - if action is gathering, move towards known resources within your territory
 - If socializing, move towards another villager from your tribe
 - If sleeping/eating/drinking, move towards a hut, fire, well, or water source in your village
-- Active villagers should be working or gathering within tribal lands unless they are scouting
-- Social villagers should seek out others from their own tribe
-- Move coordinates should be integers between 0-63
-- Villagers with hunger < 30 or thirst < 30 should always be assigned survival actions first`;
+- Move coordinates should be integers between 0-63`;
 
     const result = await this.generate(prompt);
 
