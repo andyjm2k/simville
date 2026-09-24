@@ -722,14 +722,19 @@ test('resourceScore weights food and water', () => {
 });
 
 test('determineWinner picks higher composite score', () => {
+  // Build a two-village game so determineWinner uses score comparison
   const game = makeGame([makeVillage('a'), makeVillage('b')]);
+  // Slot A outscores slot B on the multi-metric composite
   const snapshots = [
     { agent: { slot: 'A' }, villageName: 'A', population: 5, compositeScore: 200 },
     { agent: { slot: 'B' }, villageName: 'B', population: 5, compositeScore: 150 }
   ];
+  // Resolve the winner from the final snapshots
   const outcome = BenchmarkScorer.determineWinner(snapshots, game);
+  // Higher compositeScore should win
   assert.strictEqual(outcome.winner, 'A');
-  assert.strictEqual(outcome.reason, 'composite_score');
+  // Reason string matches BenchmarkScorer multi-metric win path
+  assert.strictEqual(outcome.reason, 'multi_metric_composite');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
