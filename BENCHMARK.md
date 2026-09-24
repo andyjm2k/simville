@@ -2,11 +2,19 @@
 
 Headless **LLM vs opponent** runs to measure village decision-making and competitive outcomes.
 
+**Default eval fidelity:** hard survival (no hunger/thirst/health floors), no autonomous rules-engine builds, multi-metric scoring. Use `--easy-needs` only for demos/smoke tests.
+
 ## Quick start
 
 ```bash
-# Heuristic vs heuristic (no API — smoke test)
+# Heuristic vs heuristic (no API — smoke test, hard survival)
 npm run benchmark -- --days 5 --seed 42 --agent-a-type baseline --agent-b-type baseline
+
+# Stress scenario pack (famine, asymmetric, hostile raider) × 5 seeds
+npm run benchmark -- --scenario-pack --replicates 5 --days 8 --agent-a-type baseline --agent-b-type baseline
+
+# Single stress scenario
+npm run benchmark -- --scenario famine --days 10 --agent-a-type baseline --agent-b-type baseline
 
 # LLM vs baseline heuristic
 cp benchmark.example.json my-benchmark.json
@@ -27,12 +35,21 @@ Each village is controlled by an **agent**:
 | Agent type | Description |
 |------------|-------------|
 | `llm` | OpenAI-compatible API drives villager actions + chieftan diplomacy |
-| `baseline` | Rule-based heuristic (gather/build/raid priorities) |
+| `baseline` | Rule-based heuristic (`strategy`: `balanced` \| `raider`) |
 
-**Scoring** (composite at end of horizon):
+**Multi-metric scoring** (reported per village):
 
-- Population, structures, weighted resources, village strength
-- **Winner**: elimination/conquest, else highest composite score
+| Metric | Meaning |
+|--------|---------|
+| `survival` | Population kept alive + need/health state |
+| `growth` | Population + **agent-built** structures + resources |
+| `military` | Village strength |
+| `socialGoals` | Rival relations + personal goal progress |
+| `compositeScore` | Weighted blend (secondary ranking key) |
+
+Starting structures are excluded from growth credit. Autonomous construction is **off** unless `--allow-autonomous-build`.
+
+**Winner**: elimination/conquest, else highest multi-metric composite.
 
 Reports include daily snapshots, per-agent LLM latency/failure stats, and diplomacy/raid events.
 
@@ -44,22 +61,34 @@ Reports include daily snapshots, per-agent LLM latency/failure stats, and diplom
 | `days` | In-game day horizon |
 | `dayLengthMs` | Real ms per game day (lower = faster runs) |
 | `tickIntervalMs` | Ms between agent decision ticks |
+| `easyNeeds` | `true` restores old need floors (opt-in demo only) |
+| `allowAutonomousBuild` | `true` re-enables rules-engine builds |
+| `scenario` | `famine` \| `asymmetric` \| `hostile_baseline` \| null |
 | `agentA` / `agentB` | Village 0 / Village 1 controllers |
 
 **LLM vs LLM**: set both `agentA` and `agentB` to `type: "llm"` with different models/endpoints.
 
+## CLI fidelity flags
+
+| Flag | Effect |
+|------|--------|
+| `--easy-needs` | Enable need floors (demo/smoke only) |
+| `--allow-autonomous-build` | Credit rules-engine construction again |
+| `--scenario <id>` | Apply a stress scenario |
+| `--scenario-pack` | Run famine/asymmetric/hostile × `--replicates` (default 5) |
+| `--replicates <n>` | Seeded replicates per scenario in a pack |
+
 ## Output
 
 - Full report: `benchmark-report.json` (or `--output`)
-- Summary JSON on stdout (winner, scores)
+- Summary JSON on stdout (winner, scores, metrics)
 
 ## Architecture
 
-- `src/renderer/js/systems/benchmark.js` — runner + scorer
-- `src/renderer/js/systems/baseline-agent.js` — heuristic opponent
+- `src/renderer/js/systems/benchmark.js` — runner + multi-metric scorer
+- `src/renderer/js/systems/scenarios.js` — stress scenarios + replicate expansion
+- `src/renderer/js/systems/baseline-agent.js` — heuristic opponent (incl. raider)
 - `src/renderer/js/systems/batch-runner.js` — batch execution & parameter sweeps
-- `src/renderer/js/systems/progress-monitor.js` — progress tracking & observability
-- `src/renderer/js/systems/failure-handler.js` — retry logic & error handling
 - `scripts/run-benchmark.js` — CLI (Node, no Electron UI)
 - `Game.initializeHeadless()` + `runHeadlessTick()` — simulation without rendering
 

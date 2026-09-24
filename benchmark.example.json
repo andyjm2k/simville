@@ -4,6 +4,9 @@
   "dayLengthMs": 30000,
   "tickIntervalMs": 5000,
   "output": "benchmark-report.json",
+  "easyNeeds": false,
+  "allowAutonomousBuild": false,
+  "scenario": null,
   "agentA": {
     "type": "llm",
     "name": "llm-contender",
@@ -15,6 +18,7 @@
   },
   "agentB": {
     "type": "baseline",
-    "name": "heuristic-opponent"
+    "name": "heuristic-opponent",
+    "strategy": "balanced"
   }
 }

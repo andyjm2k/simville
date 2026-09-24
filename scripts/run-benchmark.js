@@ -22,7 +22,7 @@ const root = path.join(__dirname, '..');
 
 function parseArgs(argv) {
   const options = {
-    mode: 'single', // single, batch, sweep
+    mode: 'single', // single, batch, sweep, scenarios
     config: null,
     batchConfig: null,
     sweepConfig: null,
@@ -37,7 +37,9 @@ function parseArgs(argv) {
     generateCharts: false,
     compareRuns: false,
     showTerminalCharts: false,
-    advancedMetrics: false
+    advancedMetrics: false,
+    scenarioPack: false,
+    replicates: 5
   };
 
   const singleRunConfig = {
@@ -46,6 +48,9 @@ function parseArgs(argv) {
     dayLengthMs: 30000,
     tickIntervalMs: 5000,
     output: 'benchmark-report.json',
+    easyNeeds: false,
+    allowAutonomousBuild: false,
+    scenario: null,
     agentA: { type: 'llm', name: 'agent-a' },
     agentB: { type: 'baseline', name: 'baseline-heuristic' }
   };
@@ -60,6 +65,17 @@ function parseArgs(argv) {
     } else if (arg === '--sweep' && argv[i + 1]) {
       options.mode = 'sweep';
       options.sweepConfig = JSON.parse(fs.readFileSync(path.resolve(argv[++i]), 'utf8'));
+    } else if (arg === '--scenario-pack') {
+      options.mode = 'scenarios';
+      options.scenarioPack = true;
+    } else if (arg === '--replicates' && argv[i + 1]) {
+      options.replicates = Number(argv[++i]);
+    } else if (arg === '--scenario' && argv[i + 1]) {
+      singleRunConfig.scenario = argv[++i];
+    } else if (arg === '--easy-needs') {
+      singleRunConfig.easyNeeds = true;
+    } else if (arg === '--allow-autonomous-build') {
+      singleRunConfig.allowAutonomousBuild = true;
     } else if (arg === '--parallel' && argv[i + 1]) {
       options.parallel = Number(argv[++i]);
     } else if (arg === '--retries' && argv[i + 1]) {
@@ -104,10 +120,15 @@ Single run:
   --output <file>       Report path (default benchmark-report.json)
   --agent-a-type llm|baseline
   --agent-b-type llm|baseline
+  --scenario <id>       Stress scenario: default|famine|asymmetric|hostile_baseline
+  --easy-needs          Opt-in need floors (demo only; hard survival is default)
+  --allow-autonomous-build  Let rules-engine builds run (off by default)
 
 Batch execution:
   --batch <file>        Batch config with multiple runs
   --sweep <file>        Parameter sweep config
+  --scenario-pack       Run famine/asymmetric/hostile_baseline with replicates
+  --replicates <n>      Replicates per scenario (default 5, for --scenario-pack)
   --parallel <n>        Number of parallel workers (default 1)
   --retries <n>         Max retry attempts per run (default 3)
   --checkpoint <file>   Checkpoint file path
@@ -257,6 +278,7 @@ function loadScript(relPath, sandbox) {
 ;if (typeof RaidSystem !== 'undefined') globalThis.RaidSystem = RaidSystem;
 ;if (typeof DiplomacySystem !== 'undefined') globalThis.DiplomacySystem = DiplomacySystem;
 ;if (typeof BaselineAgent !== 'undefined') globalThis.BaselineAgent = BaselineAgent;
+;if (typeof BenchmarkScenarios !== 'undefined') globalThis.BenchmarkScenarios = BenchmarkScenarios;
 ;if (typeof BenchmarkScorer !== 'undefined') globalThis.BenchmarkScorer = BenchmarkScorer;
 ;if (typeof BenchmarkRunner !== 'undefined') globalThis.BenchmarkRunner = BenchmarkRunner;
 ;if (typeof BatchRunner !== 'undefined') globalThis.BatchRunner = BatchRunner;
@@ -372,6 +394,52 @@ async function runSingle(config, options, sandbox) {
   }
 
   return report;
+}
+
+/**
+ * Expand stress scenarios into ≥N seeded replicates and run as a batch.
+ * @param {object} baseConfig
+ * @param {object} options
+ * @param {object} sandbox
+ */
+async function runScenarioPack(baseConfig, options, sandbox) {
+  const { BenchmarkScenarios } = sandbox;
+  const runs = BenchmarkScenarios.expandReplicates(baseConfig, {
+    replicates: options.replicates || 5,
+    baseSeed: baseConfig.seed,
+    scenarios: ['famine', 'asymmetric', 'hostile_baseline'],
+    outputPattern: 'scenario-{scenario}-{i}.json'
+  });
+
+  // Force baseline smoke agents when no API key (pack must be runnable without LLM)
+  for (const run of runs) {
+    if (!run.agentA?.apiKey && run.agentA?.type === 'llm' && !process.env.SIMVILLE_LLM_API_KEY) {
+      run.agentA = { type: 'baseline', name: 'agent-a-baseline', strategy: 'balanced' };
+    }
+    if (!run.agentB?.apiKey && run.agentB?.type === 'llm' && !process.env.SIMVILLE_LLM_API_KEY) {
+      run.agentB = {
+        type: 'baseline',
+        name: run.scenario === 'hostile_baseline' ? 'baseline-raider' : 'agent-b-baseline',
+        strategy: run.scenario === 'hostile_baseline' ? 'raider' : 'balanced'
+      };
+    }
+    run.days = run.days || baseConfig.days || 8;
+    run.dayLengthMs = run.dayLengthMs || 15000;
+    run.tickIntervalMs = run.tickIntervalMs || 4000;
+  }
+
+  const batchConfig = {
+    output: baseConfig.output || 'scenario-pack-report.json',
+    runs
+  };
+
+  const summary = await runBatch(batchConfig, options, sandbox);
+  const byScenario = {};
+  for (const run of runs) {
+    byScenario[run.scenario] = (byScenario[run.scenario] || 0) + 1;
+  }
+  summary.byScenario = byScenario;
+  return summary;
 }
 
 async function runBatch(batchConfig, options, sandbox) {
@@ -533,8 +601,13 @@ async function main() {
     'src/renderer/js/systems/economy.js',
     'src/renderer/js/systems/raid.js',
     'src/renderer/js/systems/diplomacy.js',
+    'src/renderer/js/systems/place-memory.js',
+    'src/renderer/js/systems/place-memory-social.js',
     'src/renderer/js/systems/exploration.js',
+    'src/renderer/js/systems/social.js',
+    'src/renderer/js/systems/social-community.js',
     'src/renderer/js/systems/baseline-agent.js',
+    'src/renderer/js/systems/scenarios.js',
     'src/renderer/js/systems/benchmark.js',
     'src/renderer/js/systems/batch-runner.js',
     'src/renderer/js/systems/progress-monitor.js',
@@ -579,9 +652,21 @@ async function main() {
       failed: result.failed
     }, null, 2));
 
+  } else if (options.mode === 'scenarios') {
+    result = await runScenarioPack(singleRunConfig, options, sandbox);
+    console.log(JSON.stringify({
+      mode: 'scenarios',
+      replicates: options.replicates,
+      total: result.total,
+      completed: result.completed,
+      failed: result.failed,
+      scenarios: result.byScenario || null
+    }, null, 2));
+
   } else {
     if (!options.silent) {
       console.error(`Simville benchmark — seed=${singleRunConfig.seed} days=${singleRunConfig.days}`);
+      console.error(`  hard survival (easyNeeds=${!!singleRunConfig.easyNeeds}) scenario=${singleRunConfig.scenario || 'default'}`);
       console.error(`  Agent A: ${singleRunConfig.agentA?.type} (${singleRunConfig.agentA?.name || singleRunConfig.agentA?.model || '?'})`);
       console.error(`  Agent B: ${singleRunConfig.agentB?.type} (${singleRunConfig.agentB?.name || singleRunConfig.agentB?.model || '?'})`);
     }
@@ -594,11 +679,15 @@ async function main() {
       reason: result.outcome.reason,
       margin: result.outcome.margin,
       daysSimulated: result.daysSimulated,
+      easyNeeds: result.easyNeeds,
+      scenario: result.scenario,
       final: result.final.map(v => ({
         slot: v.agent?.slot,
         name: v.villageName,
         compositeScore: v.compositeScore,
-        population: v.population
+        metrics: v.metrics,
+        population: v.population,
+        agentStructures: v.agentStructures
       }))
     }, null, 2));
   }
