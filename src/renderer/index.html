@@ -168,30 +168,117 @@
       </div>
       <div class="panel-content">
         <div class="settings-section">
-          <h4>LLM Configuration</h4>
-          <div class="form-group">
-            <label for="setting-endpoint">Endpoint</label>
-            <input type="text" id="setting-endpoint" placeholder="https://api.openai.com/v1">
+          <h4>Agents (per tribe)</h4>
+          <p class="settings-hint">Agent A controls the first tribe; Agent B the rival. Each LLM gets its own client and chat history.</p>
+
+          <div class="agent-settings" data-agent="A">
+            <h5>Agent A — Tribe 1</h5>
+            <div class="form-group">
+              <label for="setting-agent-a-type">Type</label>
+              <select id="setting-agent-a-type">
+                <option value="llm">LLM</option>
+                <option value="baseline">Baseline</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="setting-agent-a-name">Name</label>
+              <input type="text" id="setting-agent-a-name" placeholder="llm-agent-a">
+            </div>
+            <div class="agent-llm-fields" id="agent-a-llm-fields">
+              <div class="form-group">
+                <label for="setting-agent-a-endpoint">Endpoint</label>
+                <input type="text" id="setting-agent-a-endpoint" placeholder="https://api.openai.com/v1">
+              </div>
+              <div class="form-group">
+                <label for="setting-agent-a-model">Model</label>
+                <input type="text" id="setting-agent-a-model" placeholder="gpt-4o-mini">
+              </div>
+              <div class="form-group">
+                <label for="setting-agent-a-apikey">API Key</label>
+                <input type="password" id="setting-agent-a-apikey" placeholder="sk-...">
+              </div>
+              <div class="form-group">
+                <label for="setting-agent-a-tokens">Max Tokens</label>
+                <input type="number" id="setting-agent-a-tokens" min="100" max="2000" value="500">
+              </div>
+              <div class="form-group">
+                <label for="setting-agent-a-temperature">Temperature</label>
+                <input type="range" id="setting-agent-a-temperature" min="0" max="1" step="0.1" value="0.8">
+                <span id="temp-value-a">0.8</span>
+              </div>
+              <button class="btn-primary" id="btn-test-connection-a" type="button">Test A</button>
+              <p id="connection-status-a"></p>
+            </div>
+            <div class="agent-baseline-fields hidden" id="agent-a-baseline-fields">
+              <div class="form-group">
+                <label for="setting-agent-a-strategy">Strategy</label>
+                <select id="setting-agent-a-strategy">
+                  <option value="balanced">Balanced</option>
+                  <option value="raider">Raider</option>
+                  <option value="gatherer">Gatherer</option>
+                </select>
+              </div>
+            </div>
           </div>
-          <div class="form-group">
-            <label for="setting-model">Model</label>
-            <input type="text" id="setting-model" placeholder="gpt-4o-mini">
+
+          <div class="agent-settings" data-agent="B">
+            <h5>Agent B — Tribe 2 (rival)</h5>
+            <div class="form-group">
+              <label for="setting-agent-b-type">Type</label>
+              <select id="setting-agent-b-type">
+                <option value="llm">LLM</option>
+                <option value="baseline">Baseline</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="setting-agent-b-name">Name</label>
+              <input type="text" id="setting-agent-b-name" placeholder="llm-agent-b">
+            </div>
+            <div class="agent-llm-fields" id="agent-b-llm-fields">
+              <div class="form-group">
+                <label for="setting-agent-b-endpoint">Endpoint</label>
+                <input type="text" id="setting-agent-b-endpoint" placeholder="https://api.openai.com/v1">
+              </div>
+              <div class="form-group">
+                <label for="setting-agent-b-model">Model</label>
+                <input type="text" id="setting-agent-b-model" placeholder="gpt-4o-mini">
+              </div>
+              <div class="form-group">
+                <label for="setting-agent-b-apikey">API Key</label>
+                <input type="password" id="setting-agent-b-apikey" placeholder="sk-...">
+              </div>
+              <div class="form-group">
+                <label for="setting-agent-b-tokens">Max Tokens</label>
+                <input type="number" id="setting-agent-b-tokens" min="100" max="2000" value="500">
+              </div>
+              <div class="form-group">
+                <label for="setting-agent-b-temperature">Temperature</label>
+                <input type="range" id="setting-agent-b-temperature" min="0" max="1" step="0.1" value="0.8">
+                <span id="temp-value-b">0.8</span>
+              </div>
+              <button class="btn-primary" id="btn-test-connection-b" type="button">Test B</button>
+              <p id="connection-status-b"></p>
+            </div>
+            <div class="agent-baseline-fields hidden" id="agent-b-baseline-fields">
+              <div class="form-group">
+                <label for="setting-agent-b-strategy">Strategy</label>
+                <select id="setting-agent-b-strategy">
+                  <option value="balanced">Balanced</option>
+                  <option value="raider">Raider</option>
+                  <option value="gatherer">Gatherer</option>
+                </select>
+              </div>
+            </div>
           </div>
-          <div class="form-group">
-            <label for="setting-apikey">API Key</label>
-            <input type="password" id="setting-apikey" placeholder="sk-...">
-          </div>
-          <div class="form-group">
-            <label for="setting-tokens">Max Tokens</label>
-            <input type="number" id="setting-tokens" min="100" max="2000" value="500">
-          </div>
-          <div class="form-group">
-            <label for="setting-temperature">Temperature</label>
-            <input type="range" id="setting-temperature" min="0" max="1" step="0.1" value="0.8">
-            <span id="temp-value">0.8</span>
-          </div>
-          <button class="btn-primary" id="btn-test-connection">Test Connection</button>
-          <p id="connection-status"></p>
+
+          <!-- Legacy single-field ids kept for older UI code paths / tests -->
+          <input type="hidden" id="setting-endpoint" value="">
+          <input type="hidden" id="setting-model" value="">
+          <input type="hidden" id="setting-apikey" value="">
+          <input type="hidden" id="setting-tokens" value="500">
+          <input type="hidden" id="setting-temperature" value="0.8">
+          <span id="temp-value" class="hidden">0.8</span>
+          <p id="connection-status" class="hidden"></p>
         </div>
 
         <div class="settings-section">
@@ -296,6 +383,7 @@
   <script src="js/systems/baseline-agent.js"></script>
   <script src="js/systems/scenarios.js"></script>
   <script src="js/systems/benchmark.js"></script>
+  <script src="js/systems/village-agents.js"></script>
   <script src="js/game.js"></script>
 </body>
 </html>
