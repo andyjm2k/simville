@@ -1,7 +1,7 @@
 // Simville Benchmark — headless LLM vs opponent scoring and runner
 
 /**
- * Computes comparable scores for benchmark villages.
+ * Computes comparable multi-metric scores for benchmark villages.
  */
 class BenchmarkScorer {
   /**
@@ -24,7 +24,79 @@ class BenchmarkScorer {
   }
 
   /**
-   * Snapshot one village for reporting.
+   * Structures built after start (agent credit); excludes starting stock.
+   * @param {object} village
+   * @param {object} game
+   * @returns {number}
+   */
+  static agentBuiltStructures(village, game) {
+    const total = village.structureIds?.length || 0;
+    const starting = game.benchmarkStartingStructures?.[village.id] || 0;
+    return Math.max(0, total - starting);
+  }
+
+  /**
+   * Survival dimension: living pop health/needs pressure.
+   * @param {Array} villagers
+   * @returns {number}
+   */
+  static survivalScore(villagers = []) {
+    if (!villagers.length) return 0;
+    const avg = (key, fallback = 100) =>
+      villagers.reduce((sum, v) => sum + (v[key] ?? fallback), 0) / villagers.length;
+    const health = avg('health');
+    const hunger = avg('hunger');
+    const thirst = avg('thirst');
+    // Population kept alive is the primary survival signal
+    return Math.round((villagers.length * 20 + health * 0.5 + hunger * 0.25 + thirst * 0.25) * 10) / 10;
+  }
+
+  /**
+   * Growth dimension: pop + agent-built structures + resources (no autonomous credit).
+   * @param {number} population
+   * @param {number} agentStructures
+   * @param {number} resourceTotal
+   * @returns {number}
+   */
+  static growthScore(population, agentStructures, resourceTotal) {
+    return Math.round((population * 12 + agentStructures * 18 + resourceTotal) * 10) / 10;
+  }
+
+  /**
+   * Military dimension from village strength.
+   * @param {number} strength
+   * @returns {number}
+   */
+  static militaryScore(strength) {
+    return Math.round(strength * 10) / 10;
+  }
+
+  /**
+   * Social/goals dimension from relations and personal goal completion.
+   * @param {object} village
+   * @param {Array} villagers
+   * @param {object} game
+   * @returns {number}
+   */
+  static socialGoalsScore(village, villagers, game) {
+    const rival = game.villages?.find((v) => v.id !== village.id);
+    const relation = rival ? (village.relations?.[rival.id] ?? 0) : 0;
+    let goalPoints = 0;
+    let goalTotal = 0;
+    for (const v of villagers) {
+      for (const g of v.goals || []) {
+        goalTotal += 1;
+        if (g.completed) goalPoints += 1;
+        else if (g.failed) goalPoints += 0;
+        else goalPoints += Math.min(1, (g.progress || 0) / 100);
+      }
+    }
+    const goalRate = goalTotal ? goalPoints / goalTotal : 0;
+    return Math.round((relation * 0.4 + goalRate * 40) * 10) / 10;
+  }
+
+  /**
+   * Snapshot one village for reporting with multi-metric scores.
    * @param {object} village
    * @param {object} game
    * @param {object} agentMeta
@@ -36,8 +108,17 @@ class BenchmarkScorer {
     const resources = game.getResources(village.id);
     const population = villagers.length;
     const structures = village.structureIds?.length || 0;
+    const agentStructures = BenchmarkScorer.agentBuiltStructures(village, game);
     const strength = village.calculateStrength(game.villagers);
     const resourceTotal = BenchmarkScorer.resourceScore(resources);
+    const survival = BenchmarkScorer.survivalScore(villagers);
+    const growth = BenchmarkScorer.growthScore(population, agentStructures, resourceTotal);
+    const military = BenchmarkScorer.militaryScore(strength);
+    const socialGoals = BenchmarkScorer.socialGoalsScore(village, villagers, game);
+    // Composite uses agent-built structures only (not total structures)
+    const compositeScore = Math.round(
+      (survival * 0.35 + growth * 0.35 + military * 0.2 + socialGoals * 0.1) * 10
+    ) / 10;
 
     return {
       villageId: village.id,
@@ -45,10 +126,17 @@ class BenchmarkScorer {
       agent: agentMeta,
       population,
       structures,
+      agentStructures,
       strength: Math.round(strength * 10) / 10,
       resources: { ...resources },
       resourceScore: Math.round(resourceTotal * 10) / 10,
-      compositeScore: Math.round((population * 12 + structures * 18 + resourceTotal + strength * 0.5) * 10) / 10,
+      metrics: {
+        survival,
+        growth,
+        military,
+        socialGoals
+      },
+      compositeScore,
       relationToRival: null,
       atWar: [...(village.atWarWith || [])],
       agentStats: { ...agentStats }
@@ -56,7 +144,7 @@ class BenchmarkScorer {
   }
 
   /**
-   * Determine winner from final snapshots.
+   * Determine winner from final snapshots using multi-metric composite.
    * @param {Array} snapshots
    * @param {object} game
    * @returns {object}
@@ -82,13 +170,14 @@ class BenchmarkScorer {
 
     return {
       winner,
-      reason: margin === 0 ? 'tie_score' : 'composite_score',
+      reason: margin === 0 ? 'tie_score' : 'multi_metric_composite',
       margin: Math.round(margin * 10) / 10,
       winnerName: sorted[0].villageName,
       scores: sorted.map((s) => ({
         slot: s.agent?.slot,
         name: s.villageName,
-        compositeScore: s.compositeScore
+        compositeScore: s.compositeScore,
+        metrics: s.metrics
       }))
     };
   }
@@ -112,7 +201,10 @@ class BenchmarkRunner {
    */
   static createAgent(agentConfig = {}) {
     if (agentConfig.type === 'baseline' || agentConfig.type === 'heuristic') {
-      return new BaselineAgent({ name: agentConfig.name || 'baseline-heuristic' });
+      return new BaselineAgent({
+        name: agentConfig.name || 'baseline-heuristic',
+        strategy: agentConfig.strategy || 'balanced'
+      });
     }
 
     const llm = new LLMManager();
@@ -164,8 +256,21 @@ class BenchmarkRunner {
         type: agent.type || 'llm',
         name: agent.name || agentConfig.name || key,
         model: agentConfig.model || null,
-        endpoint: agentConfig.endpoint || null
+        endpoint: agentConfig.endpoint || null,
+        strategy: agentConfig.strategy || null
       };
+    }
+  }
+
+  /**
+   * Apply named stress scenario after headless init (mutates game state).
+   * @param {string|object} scenario
+   */
+  applyScenario(scenario) {
+    if (!scenario) return;
+    const id = typeof scenario === 'string' ? scenario : scenario.id;
+    if (typeof BenchmarkScenarios !== 'undefined' && BenchmarkScenarios.apply) {
+      BenchmarkScenarios.apply(this.game, id, typeof scenario === 'object' ? scenario : {});
     }
   }
 
@@ -181,15 +286,20 @@ class BenchmarkRunner {
     const tickMs = config.tickIntervalMs || 5000;
     const dayLengthMs = config.dayLengthMs || 60000;
     const maxTicks = config.maxTicks || Math.ceil((targetDays * dayLengthMs) / tickMs) + 50;
+    const easyNeeds = config.easyNeeds === true;
+    const allowAutonomousBuild = config.allowAutonomousBuild === true;
 
     await this.game.initializeHeadless({
       seed,
       dayLengthMs,
       tickIntervalMs: tickMs,
-      skipBackstories: true
+      skipBackstories: true,
+      easyNeeds,
+      allowAutonomousBuild
     });
 
     this.setupAgents(config);
+    this.applyScenario(config.scenario);
 
     const dailySnapshots = [];
     let ticks = 0;
@@ -204,7 +314,6 @@ class BenchmarkRunner {
         dailySnapshots.push(this.captureSnapshot(lastRecordedDay));
       }
 
-      // Stop early if one village eliminated
       const alive = this.game.villages.filter(
         (v) => this.game.getVillagersForVillage(v.id).length > 0
       );
@@ -224,7 +333,6 @@ class BenchmarkRunner {
       );
     });
 
-    // Cross-fill rival relations
     if (this.game.villages.length === 2) {
       const [a, b] = this.game.villages;
       finalSnapshots[0].relationToRival = a.relations[b.id] ?? 0;
@@ -241,12 +349,16 @@ class BenchmarkRunner {
       daysSimulated: this.game.timeState.day,
       ticksExecuted: ticks,
       durationMs: Date.now() - startedAt,
+      easyNeeds,
+      allowAutonomousBuild,
+      scenario: config.scenario || null,
       outcome,
       agents: finalSnapshots.map((s) => ({
         slot: s.agent?.slot,
         type: s.agent?.type,
         name: s.agent?.name,
-        model: s.agent?.model
+        model: s.agent?.model,
+        strategy: s.agent?.strategy
       })),
       dailySnapshots,
       final: finalSnapshots,
@@ -263,18 +375,19 @@ class BenchmarkRunner {
     return {
       day,
       villages: this.game.villages.map((v) => {
-        const resources = this.game.getResources(v.id);
+        const scored = BenchmarkScorer.scoreVillage(
+          v,
+          this.game,
+          this.game.benchmarkAgentMeta[v.id]
+        );
         return {
           villageId: v.id,
           name: v.name,
           slot: this.game.benchmarkAgentMeta[v.id]?.slot,
-          population: this.game.getVillagersForVillage(v.id).length,
-          resourceScore: Math.round(BenchmarkScorer.resourceScore(resources) * 10) / 10,
-          compositeScore: BenchmarkScorer.scoreVillage(
-            v,
-            this.game,
-            this.game.benchmarkAgentMeta[v.id]
-          ).compositeScore
+          population: scored.population,
+          resourceScore: scored.resourceScore,
+          compositeScore: scored.compositeScore,
+          metrics: scored.metrics
         };
       })
     };

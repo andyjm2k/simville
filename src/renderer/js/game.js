@@ -1771,8 +1771,8 @@ class Game {
   }
 
   onNewDay() {
-    if (this.benchmarkMode) {
-      // Keep benchmark runs competitive (decisions) rather than starvation-dominated
+    // Opt-in easy mode only: default hard benchmarks must feel real scarcity
+    if (this.benchmarkMode && this.easyNeeds) {
       this.villagers.forEach(v => {
         v.hunger = Math.max(v.hunger, 45);
         v.thirst = Math.max(v.thirst ?? 100, 45);
@@ -2898,10 +2898,16 @@ class Game {
 
   async initializeHeadless(options = {}) {
     this.benchmarkMode = true;
+    // Hard survival is default; set easyNeeds:true to restore old need floors
+    this.easyNeeds = options.easyNeeds === true;
+    // Autonomous rules-engine builds off by default so structure growth is agent credit
+    this.allowAutonomousBuild = options.allowAutonomousBuild === true;
     this.benchmarkEvents = [];
     this.benchmarkAgents = {};
     this.benchmarkAgentMeta = {};
     this.skipBackstories = options.skipBackstories !== false;
+    // Starting structure count per village after setup (for agent-built delta scoring)
+    this.benchmarkStartingStructures = {};
 
     const seed = options.seed ?? 4242;
     Utils.setSeed(seed);
@@ -2947,6 +2953,11 @@ class Game {
       this.seedBenchmarkVillagers();
     } else {
       await this.generateInitialBackstories();
+    }
+
+    // Record baseline structure counts so scorers can exclude starting + autonomous builds
+    for (const village of this.villages) {
+      this.benchmarkStartingStructures[village.id] = village.structureIds?.length || 0;
     }
   }
 
@@ -3184,7 +3195,8 @@ class Game {
     this.processChieftanDecisions();
     this.checkDeaths();
 
-    if (this.benchmarkMode) {
+    // Tick floors only when easyNeeds is explicitly enabled for demo/smoke runs
+    if (this.benchmarkMode && this.easyNeeds) {
       for (const v of this.villagers) {
         v.hunger = Math.max(v.hunger, 35);
         v.thirst = Math.max(v.thirst ?? 100, 35);
@@ -4540,6 +4552,8 @@ Respond with JSON: {
 
   planAutonomousConstruction() {
     if (!this.world) return;
+    // Hard benchmarks: do not let the rules engine grow the village for the agent
+    if (this.benchmarkMode && !this.allowAutonomousBuild) return;
 
     // Plan at most one project per tick, but evaluate each tribe's own stockpile
     for (const village of this.villages) {

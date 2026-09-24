@@ -11,6 +11,8 @@ class BaselineAgent {
     // Agent display name in benchmark reports
     this.type = 'baseline';
     this.name = options.name || 'baseline-heuristic';
+    // Strategy: balanced | raider | gatherer — specialist baselines for stress packs
+    this.strategy = options.strategy || 'balanced';
     this.stats = {
       calls: 0,
       actionsGenerated: 0,
@@ -114,6 +116,20 @@ class BaselineAgent {
       }
 
       // Village-level priorities
+      if (this.strategy === 'raider' && worldState.rivalVillage?.discovered) {
+        // Hostile specialist: prefer scouting/combat posture when stocked enough to survive
+        if (foodReserve >= pop * 3 && waterReserve >= pop * 2) {
+          return {
+            villagerId: v.id,
+            action: 'scouting',
+            moveTo: this.findResourceTarget(v, game, CONSTANTS.RESOURCE.WOOD) || moveNearCenter,
+            duration: 5,
+            speechEmoji: '👀',
+            speechTheme: 'Scouting for advantage'
+          };
+        }
+      }
+
       if (foodReserve < pop * 4) {
         const target = this.findResourceTarget(v, game, CONSTANTS.RESOURCE.FOOD) || moveNearCenter;
         const action = Utils.randomInt(0, 2) === 0 ? 'fishing' : 'gathering';
@@ -189,6 +205,30 @@ class BaselineAgent {
     const atWar = village.atWarWith?.includes(otherVillage.id);
 
     let decision;
+    if (this.strategy === 'raider' && context?.rivalDiscovered !== false) {
+      // Aggressive specialist baseline: raid early when not outmatched
+      if ((village.raidCooldown || 0) <= 0 && strengthRatio >= 0.85) {
+        decision = {
+          action: 'raid',
+          targetVillage: otherVillage.name,
+          reason: 'Raider doctrine: pressure the rival whenever viable.',
+          urgency: 'high'
+        };
+        this.recordCall(Date.now() - start, 1);
+        return decision;
+      }
+      if (relation < 10) {
+        decision = {
+          action: 'send_threat',
+          targetVillage: otherVillage.name,
+          reason: 'Raider doctrine: escalate before they consolidate.',
+          urgency: 'medium'
+        };
+        this.recordCall(Date.now() - start, 1);
+        return decision;
+      }
+    }
+
     if (context?.rivalDiscovered === false) {
       decision = {
         action: 'observe',
