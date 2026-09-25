@@ -9,7 +9,7 @@ log.transports.file.level = 'info';
 log.transports.file.maxSize = 10 * 1024 * 1024; // 10MB
 log.transports.console.level = false;
 
-const ALLOWED_CONFIG_KEYS = new Set(['llm', 'simulation', 'graphics', 'audio', 'window']);
+const ALLOWED_CONFIG_KEYS = new Set(['llm', 'agents', 'simulation', 'graphics', 'audio', 'window']);
 const MAX_AUTOSAVES = 5;
 
 // Initialize store for config
@@ -22,6 +22,11 @@ const store = new Store({
       apiKey: '',
       maxTokens: 500,
       temperature: 0.8
+    },
+    // Interactive dual-agent slots (A = first tribe, B = rival). Empty → legacy twin-isolated from llm.
+    agents: {
+      agentA: null,
+      agentB: null
     },
     simulation: {
       dayLengthMinutes: 10,

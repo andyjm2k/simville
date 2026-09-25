@@ -283,6 +283,51 @@ class BaselineAgent {
     this.recordCall(Date.now() - start, 1);
     return decision;
   }
+
+  /**
+   * Heuristic tech pick: continue current research or start the first available tech.
+   * @param {object} worldState
+   * @param {object} techState
+   * @param {object} timeState
+   * @returns {object}
+   */
+  generateTechDecision(worldState, techState, timeState) {
+    // Track call for parity with LLM agent stats
+    const start = Date.now();
+    const researched = techState?.researched || [];
+    const current = techState?.currentResearch?.techId || null;
+
+    // Already researching — keep going
+    if (current) {
+      this.recordCall(Date.now() - start, 1);
+      return {
+        decision: 'continue',
+        techId: current,
+        reason: 'Baseline continues the research already underway.'
+      };
+    }
+
+    // Pick first unlocked available technology from CONSTANTS.TECH
+    const available = Object.values(CONSTANTS.TECH || {}).find((tech) => {
+      if (researched.includes(tech.id)) return false;
+      return (tech.prerequisites || []).every((p) => researched.includes(p));
+    });
+
+    this.recordCall(Date.now() - start, 1);
+    if (!available) {
+      return {
+        decision: 'wait',
+        techId: null,
+        reason: 'No available technologies for baseline to start.'
+      };
+    }
+
+    return {
+      decision: 'start_new',
+      techId: available.id,
+      reason: `Baseline prioritizes ${available.name} for tribe growth.`
+    };
+  }
 }
 
 if (typeof module !== 'undefined' && module.exports) {

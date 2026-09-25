@@ -76,7 +76,7 @@ class UIManager {
       chronicleEntryList: document.getElementById('chronicle-entry-list'),
       chroniclePage: document.getElementById('chronicle-page'),
 
-      // Settings
+      // Settings — dual agents + legacy mirrors
       settingEndpoint: document.getElementById('setting-endpoint'),
       settingModel: document.getElementById('setting-model'),
       settingApiKey: document.getElementById('setting-apikey'),
@@ -84,6 +84,32 @@ class UIManager {
       settingTemperature: document.getElementById('setting-temperature'),
       tempValue: document.getElementById('temp-value'),
       connectionStatus: document.getElementById('connection-status'),
+      // Agent A
+      settingAgentAType: document.getElementById('setting-agent-a-type'),
+      settingAgentAName: document.getElementById('setting-agent-a-name'),
+      settingAgentAEndpoint: document.getElementById('setting-agent-a-endpoint'),
+      settingAgentAModel: document.getElementById('setting-agent-a-model'),
+      settingAgentAApiKey: document.getElementById('setting-agent-a-apikey'),
+      settingAgentATokens: document.getElementById('setting-agent-a-tokens'),
+      settingAgentATemperature: document.getElementById('setting-agent-a-temperature'),
+      tempValueA: document.getElementById('temp-value-a'),
+      connectionStatusA: document.getElementById('connection-status-a'),
+      settingAgentAStrategy: document.getElementById('setting-agent-a-strategy'),
+      agentALlmFields: document.getElementById('agent-a-llm-fields'),
+      agentABaselineFields: document.getElementById('agent-a-baseline-fields'),
+      // Agent B
+      settingAgentBType: document.getElementById('setting-agent-b-type'),
+      settingAgentBName: document.getElementById('setting-agent-b-name'),
+      settingAgentBEndpoint: document.getElementById('setting-agent-b-endpoint'),
+      settingAgentBModel: document.getElementById('setting-agent-b-model'),
+      settingAgentBApiKey: document.getElementById('setting-agent-b-apikey'),
+      settingAgentBTokens: document.getElementById('setting-agent-b-tokens'),
+      settingAgentBTemperature: document.getElementById('setting-agent-b-temperature'),
+      tempValueB: document.getElementById('temp-value-b'),
+      connectionStatusB: document.getElementById('connection-status-b'),
+      settingAgentBStrategy: document.getElementById('setting-agent-b-strategy'),
+      agentBLlmFields: document.getElementById('agent-b-llm-fields'),
+      agentBBaselineFields: document.getElementById('agent-b-baseline-fields'),
       settingDayLength: document.getElementById('setting-daylength'),
       settingWorldSize: document.getElementById('setting-worldsize'),
       settingLabels: document.getElementById('setting-labels'),
@@ -154,12 +180,24 @@ class UIManager {
     this.elements.btnSettings?.addEventListener('click', () => this.showSettings());
     this.elements.btnTech?.addEventListener('click', () => this.showTechPanel());
 
-    // Temperature slider
+    // Temperature sliders (Agent A / B)
+    this.elements.settingAgentATemperature?.addEventListener('input', (e) => {
+      if (this.elements.tempValueA) this.elements.tempValueA.textContent = e.target.value;
+    });
+    this.elements.settingAgentBTemperature?.addEventListener('input', (e) => {
+      if (this.elements.tempValueB) this.elements.tempValueB.textContent = e.target.value;
+    });
     this.elements.settingTemperature?.addEventListener('input', (e) => {
-      this.elements.tempValue.textContent = e.target.value;
+      if (this.elements.tempValue) this.elements.tempValue.textContent = e.target.value;
     });
 
+    // Toggle LLM vs baseline field groups
+    this.elements.settingAgentAType?.addEventListener('change', () => this.updateAgentTypeFields('A'));
+    this.elements.settingAgentBType?.addEventListener('change', () => this.updateAgentTypeFields('B'));
+
     // Settings buttons
+    document.getElementById('btn-test-connection-a')?.addEventListener('click', () => this.testAgentConnection('A'));
+    document.getElementById('btn-test-connection-b')?.addEventListener('click', () => this.testAgentConnection('B'));
     document.getElementById('btn-test-connection')?.addEventListener('click', () => this.testConnection());
     document.getElementById('btn-settings-save')?.addEventListener('click', () => this.saveSettings());
     document.getElementById('btn-settings-cancel')?.addEventListener('click', () => this.closePanel('settings-panel'));
@@ -303,18 +341,26 @@ class UIManager {
       this.elements.resPopulation.textContent = totalPop;
     }
 
-    // LLM offline / online indicator
+    // LLM offline / online indicator (any interactive agent LLM)
     if (this.elements.llmStatus) {
-      const llmMgr = window.llm || window.game?.llm || (typeof llm !== 'undefined' ? llm : null);
-      const offline = !!llmMgr?.offline;
-      if (offline) {
-        this.elements.llmStatus.textContent = 'LLM offline';
+      const managers = window.game?.villageAgents?.listLlmManagers?.() || [];
+      const llmMgr = managers[0] || window.llm || (typeof llm !== 'undefined' ? llm : null);
+      const anyOffline = managers.length
+        ? managers.some((m) => m.offline)
+        : !!llmMgr?.offline;
+      const anyConfigured = managers.length
+        ? managers.some((m) => m.config?.llm?.endpoint)
+        : !!llmMgr?.config?.llm?.endpoint;
+      if (anyOffline) {
+        this.elements.llmStatus.textContent = managers.length > 1 ? 'LLM offline (agent)' : 'LLM offline';
         this.elements.llmStatus.classList.add('offline');
         this.elements.llmStatus.title = 'Using fallback actions — LLM unavailable';
-      } else if (llmMgr) {
-        this.elements.llmStatus.textContent = 'LLM';
+      } else if (anyConfigured || llmMgr) {
+        this.elements.llmStatus.textContent = managers.length > 1 ? 'LLMs' : 'LLM';
         this.elements.llmStatus.classList.remove('offline');
-        this.elements.llmStatus.title = 'LLM connected';
+        this.elements.llmStatus.title = managers.length > 1
+          ? 'Per-tribe LLM agents connected'
+          : 'LLM connected';
       } else {
         this.elements.llmStatus.textContent = '';
       }
@@ -915,6 +961,88 @@ class UIManager {
     }
   }
 
+  /**
+   * Show/hide LLM vs baseline fields for Agent A or B.
+   * @param {'A'|'B'} slot
+   */
+  updateAgentTypeFields(slot) {
+    const typeEl = slot === 'A' ? this.elements.settingAgentAType : this.elements.settingAgentBType;
+    const llmFields = slot === 'A' ? this.elements.agentALlmFields : this.elements.agentBLlmFields;
+    const baselineFields = slot === 'A' ? this.elements.agentABaselineFields : this.elements.agentBBaselineFields;
+    const isBaseline = typeEl?.value === 'baseline';
+    llmFields?.classList.toggle('hidden', isBaseline);
+    baselineFields?.classList.toggle('hidden', !isBaseline);
+  }
+
+  /**
+   * Read one agent slot from the settings form.
+   * @param {'A'|'B'} slot
+   * @returns {object}
+   */
+  readAgentForm(slot) {
+    const isA = slot === 'A';
+    const type = (isA ? this.elements.settingAgentAType : this.elements.settingAgentBType)?.value || 'llm';
+    if (type === 'baseline') {
+      return {
+        type: 'baseline',
+        name: (isA ? this.elements.settingAgentAName : this.elements.settingAgentBName)?.value || `baseline-${slot.toLowerCase()}`,
+        strategy: (isA ? this.elements.settingAgentAStrategy : this.elements.settingAgentBStrategy)?.value || 'balanced'
+      };
+    }
+    return {
+      type: 'llm',
+      name: (isA ? this.elements.settingAgentAName : this.elements.settingAgentBName)?.value || `llm-agent-${slot.toLowerCase()}`,
+      endpoint: (isA ? this.elements.settingAgentAEndpoint : this.elements.settingAgentBEndpoint)?.value || '',
+      model: (isA ? this.elements.settingAgentAModel : this.elements.settingAgentBModel)?.value || 'gpt-4o-mini',
+      apiKey: (isA ? this.elements.settingAgentAApiKey : this.elements.settingAgentBApiKey)?.value || '',
+      maxTokens: parseInt((isA ? this.elements.settingAgentATokens : this.elements.settingAgentBTokens)?.value, 10) || 500,
+      temperature: parseFloat((isA ? this.elements.settingAgentATemperature : this.elements.settingAgentBTemperature)?.value) || 0.8
+    };
+  }
+
+  /**
+   * Populate one agent slot form from config.
+   * @param {'A'|'B'} slot
+   * @param {object} agentConfig
+   * @param {object} legacyLlm
+   */
+  populateAgentForm(slot, agentConfig, legacyLlm = {}) {
+    const isA = slot === 'A';
+    const cfg = agentConfig || {};
+    const type = cfg.type || (legacyLlm.endpoint ? 'llm' : 'baseline');
+    const typeEl = isA ? this.elements.settingAgentAType : this.elements.settingAgentBType;
+    const nameEl = isA ? this.elements.settingAgentAName : this.elements.settingAgentBName;
+    if (typeEl) typeEl.value = type === 'baseline' || type === 'heuristic' ? 'baseline' : 'llm';
+    if (nameEl) nameEl.value = cfg.name || '';
+
+    if (type === 'baseline' || type === 'heuristic') {
+      const strat = isA ? this.elements.settingAgentAStrategy : this.elements.settingAgentBStrategy;
+      if (strat) strat.value = cfg.strategy || 'balanced';
+    } else {
+      const endpoint = cfg.endpoint ?? legacyLlm.endpoint ?? '';
+      const model = cfg.model ?? legacyLlm.model ?? '';
+      const apiKey = cfg.apiKey ?? legacyLlm.apiKey ?? '';
+      const tokens = cfg.maxTokens ?? legacyLlm.maxTokens ?? 500;
+      const temp = cfg.temperature ?? legacyLlm.temperature ?? 0.8;
+      if (isA) {
+        if (this.elements.settingAgentAEndpoint) this.elements.settingAgentAEndpoint.value = endpoint;
+        if (this.elements.settingAgentAModel) this.elements.settingAgentAModel.value = model;
+        if (this.elements.settingAgentAApiKey) this.elements.settingAgentAApiKey.value = apiKey;
+        if (this.elements.settingAgentATokens) this.elements.settingAgentATokens.value = tokens;
+        if (this.elements.settingAgentATemperature) this.elements.settingAgentATemperature.value = temp;
+        if (this.elements.tempValueA) this.elements.tempValueA.textContent = temp;
+      } else {
+        if (this.elements.settingAgentBEndpoint) this.elements.settingAgentBEndpoint.value = endpoint;
+        if (this.elements.settingAgentBModel) this.elements.settingAgentBModel.value = model;
+        if (this.elements.settingAgentBApiKey) this.elements.settingAgentBApiKey.value = apiKey;
+        if (this.elements.settingAgentBTokens) this.elements.settingAgentBTokens.value = tokens;
+        if (this.elements.settingAgentBTemperature) this.elements.settingAgentBTemperature.value = temp;
+        if (this.elements.tempValueB) this.elements.tempValueB.textContent = temp;
+      }
+    }
+    this.updateAgentTypeFields(slot);
+  }
+
   async showSettings() {
     // Load current config
     let config;
@@ -924,15 +1052,23 @@ class UIManager {
       config = Utils.loadFromStorage('config') || {};
     }
 
-    // Populate form
-    if (config.llm) {
-      this.elements.settingEndpoint.value = config.llm.endpoint || '';
-      this.elements.settingModel.value = config.llm.model || '';
-      this.elements.settingApiKey.value = config.llm.apiKey || '';
-      this.elements.settingTokens.value = config.llm.maxTokens || 500;
-      this.elements.settingTemperature.value = config.llm.temperature || 0.8;
-      this.elements.tempValue.textContent = config.llm.temperature || 0.8;
-    }
+    const legacyLlm = config.llm || {};
+    // Prefer explicit agents; otherwise mirror legacy llm into both slots for editing
+    const normalized = typeof VillageAgents !== 'undefined'
+      ? VillageAgents.normalizeAgentConfigs(config)
+      : null;
+    const agentA = config.agents?.agentA || normalized?.agentA || { type: 'llm', ...legacyLlm };
+    const agentB = config.agents?.agentB || normalized?.agentB || { type: 'llm', ...legacyLlm };
+
+    this.populateAgentForm('A', agentA, legacyLlm);
+    this.populateAgentForm('B', agentB, legacyLlm);
+
+    // Keep hidden legacy fields mirrored from Agent A for older paths
+    if (this.elements.settingEndpoint) this.elements.settingEndpoint.value = agentA.endpoint || legacyLlm.endpoint || '';
+    if (this.elements.settingModel) this.elements.settingModel.value = agentA.model || legacyLlm.model || '';
+    if (this.elements.settingApiKey) this.elements.settingApiKey.value = agentA.apiKey || legacyLlm.apiKey || '';
+    if (this.elements.settingTokens) this.elements.settingTokens.value = agentA.maxTokens || legacyLlm.maxTokens || 500;
+    if (this.elements.settingTemperature) this.elements.settingTemperature.value = agentA.temperature ?? legacyLlm.temperature ?? 0.8;
 
     if (config.simulation) {
       this.elements.settingDayLength.value = config.simulation.dayLengthMinutes || 10;
@@ -946,50 +1082,92 @@ class UIManager {
       this.elements.settingParticles.checked = config.graphics.particles ?? true;
     }
 
-    this.elements.connectionStatus.textContent = '';
+    if (this.elements.connectionStatusA) this.elements.connectionStatusA.textContent = '';
+    if (this.elements.connectionStatusB) this.elements.connectionStatusB.textContent = '';
+    if (this.elements.connectionStatus) this.elements.connectionStatus.textContent = '';
 
     this.togglePanel('settings-panel');
   }
 
-  async testConnection() {
-    const config = {
-      endpoint: this.elements.settingEndpoint.value,
-      model: this.elements.settingModel.value,
-      apiKey: this.elements.settingApiKey.value,
-      maxTokens: parseInt(this.elements.settingTokens.value) || 500,
-      temperature: parseFloat(this.elements.settingTemperature.value) || 0.8
-    };
-
-    // Check if API key is empty
-    if (!config.apiKey) {
-      this.elements.connectionStatus.textContent = 'Please enter an API key first';
-      this.elements.connectionStatus.className = 'error';
+  async testAgentConnection(slot) {
+    const agent = this.readAgentForm(slot);
+    const statusEl = slot === 'A' ? this.elements.connectionStatusA : this.elements.connectionStatusB;
+    if (agent.type !== 'llm') {
+      if (statusEl) {
+        statusEl.textContent = 'Baseline agents do not use an LLM endpoint.';
+        statusEl.className = '';
+      }
+      return;
+    }
+    if (!agent.endpoint) {
+      if (statusEl) {
+        statusEl.textContent = 'Please enter an endpoint first';
+        statusEl.className = 'error';
+      }
       return;
     }
 
-    this.elements.connectionStatus.textContent = 'Testing connection...';
-    this.elements.connectionStatus.className = '';
+    if (statusEl) {
+      statusEl.textContent = 'Testing connection...';
+      statusEl.className = '';
+    }
 
-    const result = await llm.testConnection(config);
+    const result = await llm.testConnection({
+      endpoint: agent.endpoint,
+      model: agent.model,
+      apiKey: agent.apiKey,
+      maxTokens: agent.maxTokens,
+      temperature: agent.temperature
+    });
 
-    if (result.success) {
-      this.elements.connectionStatus.textContent = `✓ ${result.message}`;
-      this.elements.connectionStatus.className = 'success';
-    } else {
-      this.elements.connectionStatus.textContent = `✗ ${result.error}`;
-      this.elements.connectionStatus.className = 'error';
+    if (statusEl) {
+      if (result.success) {
+        statusEl.textContent = `✓ ${result.message}`;
+        statusEl.className = 'success';
+      } else {
+        statusEl.textContent = `✗ ${result.error}`;
+        statusEl.className = 'error';
+      }
     }
   }
 
+  async testConnection() {
+    // Legacy button → test Agent A
+    return this.testAgentConnection('A');
+  }
+
   async saveSettings() {
+    const agentA = this.readAgentForm('A');
+    const agentB = this.readAgentForm('B');
+
+    // Mirror Agent A llm fields into legacy `llm` for backward compatibility
+    const legacyLlm = agentA.type === 'llm'
+      ? {
+          endpoint: agentA.endpoint,
+          model: agentA.model,
+          apiKey: agentA.apiKey,
+          maxTokens: agentA.maxTokens,
+          temperature: agentA.temperature
+        }
+      : (agentB.type === 'llm'
+        ? {
+            endpoint: agentB.endpoint,
+            model: agentB.model,
+            apiKey: agentB.apiKey,
+            maxTokens: agentB.maxTokens,
+            temperature: agentB.temperature
+          }
+        : {
+            endpoint: '',
+            model: 'gpt-4o-mini',
+            apiKey: '',
+            maxTokens: 500,
+            temperature: 0.8
+          });
+
     const config = {
-      llm: {
-        endpoint: this.elements.settingEndpoint.value,
-        model: this.elements.settingModel.value,
-        apiKey: this.elements.settingApiKey.value,
-        maxTokens: parseInt(this.elements.settingTokens.value) || 500,
-        temperature: parseFloat(this.elements.settingTemperature.value) || 0.8
-      },
+      llm: legacyLlm,
+      agents: { agentA, agentB },
       simulation: {
         dayLengthMinutes: parseInt(this.elements.settingDayLength.value) || 10,
         worldSize: parseInt(this.elements.settingWorldSize.value) || 64
@@ -1004,16 +1182,17 @@ class UIManager {
 
     if (window.electronAPI) {
       await window.electronAPI.setConfig('llm', config.llm);
+      await window.electronAPI.setConfig('agents', config.agents);
       await window.electronAPI.setConfig('simulation', config.simulation);
       await window.electronAPI.setConfig('graphics', config.graphics);
     } else {
       Utils.saveToStorage('config', config);
     }
 
-    // Update LLM manager
-    llm.updateConfig(config);
+    // Update LLM manager legacy singleton from Agent A
+    llm.updateConfig({ llm: config.llm });
 
-    // Apply graphics toggles to the live simulation immediately
+    // Apply graphics toggles and rebuild interactive agents immediately
     if (window.game) {
       window.game.graphicsSettings = {
         ...window.game.graphicsSettings,
@@ -1021,6 +1200,7 @@ class UIManager {
       };
       window.game.updateWeatherForSeason?.();
       window.game.worldRenderer?.invalidateTerrainCache?.();
+      await window.game.setupInteractiveAgents?.(config);
     }
 
     this.closePanel('settings-panel');

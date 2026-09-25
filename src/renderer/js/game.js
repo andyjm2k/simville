@@ -78,6 +78,9 @@ class Game {
     this.benchmarkAgentMeta = {};
     this.benchmarkEvents = [];
     this.skipBackstories = false;
+
+    // Interactive dual-agent registry (separate LLM clients per village)
+    this.villageAgents = typeof VillageAgents !== 'undefined' ? new VillageAgents() : null;
   }
 
   // Get village by ID
@@ -640,7 +643,7 @@ class Game {
       return;
     }
 
-    const agent = this.benchmarkMode ? this.getBenchmarkAgent(villageId) : null;
+    const agent = this.getDecisionAgent(villageId);
     let decision;
 
     if (agent?.type === 'baseline') {
@@ -648,11 +651,14 @@ class Game {
     } else if (agent?.llm) {
       const start = Date.now();
       decision = await agent.llm.generateDiplomaticAction(village, otherVillage, context);
-      agent.stats.diplomacyCalls += 1;
-      agent.stats.calls += 1;
-      agent.stats.totalLatencyMs += Date.now() - start;
-      if (agent.llm.offline) agent.stats.failures += 1;
+      if (agent.stats) {
+        agent.stats.diplomacyCalls += 1;
+        agent.stats.calls += 1;
+        agent.stats.totalLatencyMs += Date.now() - start;
+        if (agent.llm.offline) agent.stats.failures += 1;
+      }
     } else {
+      // No per-village agent — legacy global llm
       decision = await llm.generateDiplomaticAction(village, otherVillage, context);
     }
 
@@ -736,6 +742,9 @@ class Game {
     console.log('initialize: Before newWorld');
     this.newWorld();
     console.log('initialize: After newWorld, villagers:', this.villagers.length);
+
+    // Wire per-village agents from saved Settings (after villages exist)
+    await this.setupInteractiveAgents();
 
     // Start game loop
     this.lastTick = performance.now();
@@ -1199,6 +1208,13 @@ class Game {
 
     // Initial LLM generation for backstories
     this.generateInitialBackstories();
+
+    // Re-bind Agent A/B to the new village ids (async config load)
+    if (!this.benchmarkMode) {
+      this.setupInteractiveAgents().catch((e) => {
+        console.warn('newWorld: setupInteractiveAgents failed', e);
+      });
+    }
 
     this.ui.showToast('Welcome to Simville - Two Villages!');
     this.ui.updateTribeSelector(this.villages, this.hudVillageId);
@@ -2972,6 +2988,47 @@ class Game {
     return this.benchmarkAgents?.[villageId] || null;
   }
 
+  /**
+   * Load config and attach interactive Agent A/B to current villages.
+   * Safe to call after newWorld() or when Settings are saved.
+   * @param {object} [configOverride]
+   */
+  async setupInteractiveAgents(configOverride = null) {
+    if (this.benchmarkMode) return;
+    if (!this.villageAgents) {
+      this.villageAgents = typeof VillageAgents !== 'undefined' ? new VillageAgents() : null;
+    }
+    if (!this.villageAgents || !this.villages?.length) return;
+
+    let config = configOverride;
+    if (!config) {
+      try {
+        if (window.electronAPI) {
+          config = await window.electronAPI.getAllConfig();
+        } else {
+          config = Utils.loadFromStorage('config') || {};
+        }
+      } catch (e) {
+        console.warn('setupInteractiveAgents: could not load config', e);
+        config = {};
+      }
+    }
+
+    this.villageAgents.setup(this.villages, config || {});
+    // Keep global llm config in sync for narrative / legacy helpers (history stays isolated)
+    this.villageAgents.syncLegacyGlobalLlm(typeof llm !== 'undefined' ? llm : null);
+  }
+
+  /**
+   * Decision agent for a village: benchmark agents in headless, else interactive VillageAgents.
+   * @param {string} villageId
+   * @returns {object|null}
+   */
+  getDecisionAgent(villageId) {
+    if (this.benchmarkMode) return this.getBenchmarkAgent(villageId);
+    return this.villageAgents?.getAgent(villageId) || null;
+  }
+
   getRivalVillage(villageId) {
     return this.villages.find(v => v.id !== villageId) || null;
   }
@@ -3082,11 +3139,30 @@ class Game {
   }
 
   /**
-   * True when an LLM endpoint is configured — resource labor is LLM-owned.
-   * Offline play keeps the rules-engine survival assigners.
+   * True when resource labor is agent-owned (LLM endpoint or attached decision agent).
+   * Pass villageId for per-tribe checks; omit for "any tribe uses LLM endpoint".
+   * @param {string} [villageId]
    * @returns {boolean}
    */
-  usesLlmResourceDecisions() {
+  usesLlmResourceDecisions(villageId) {
+    if (villageId) {
+      const agent = this.getDecisionAgent(villageId);
+      if (agent?.type === 'llm') {
+        return Boolean(agent.llm?.config?.llm?.endpoint);
+      }
+      // Baseline owns labor in explicit/benchmark matchups; offline-baseline keeps rules engine
+      // unless a legacy global llm endpoint was configured without re-setup
+      if (agent?.type === 'baseline') {
+        if (this.benchmarkMode) return true;
+        const mode = this.villageAgents?.normalized?.mode;
+        if (mode === 'explicit') return true;
+        return Boolean(llm?.config?.llm?.endpoint);
+      }
+      // No per-village agent yet — fall back to legacy global llm endpoint
+      return Boolean(llm?.config?.llm?.endpoint);
+    }
+    if (this.villageAgents?.anyLlmEndpointConfigured?.()) return true;
+    // Legacy fallback: single global llm endpoint
     return Boolean(llm?.config?.llm?.endpoint);
   }
 
@@ -3283,9 +3359,19 @@ class Game {
       this.addChronicleEntry(greetings[timeOfDay] || 'Life continues in Simville.');
     }
 
-    // Check if LLM is configured (endpoint required; key optional for local servers)
-    if (!llm.config?.llm?.endpoint) {
-      // No API key - villagers use built-in wandering behavior
+    // Prefer per-village agents; fall back to global llm endpoint for legacy configs
+    const agentMode = this.villageAgents?.normalized?.mode;
+    const intentionalBaseline = this.benchmarkMode || agentMode === 'explicit';
+    const anyAgentReady = this.villages.some((v) => {
+      const agent = this.getDecisionAgent(v.id);
+      if (agent?.type === 'baseline') return intentionalBaseline;
+      if (agent?.type === 'llm' && agent.llm?.config?.llm?.endpoint) return true;
+      return false;
+    });
+    const legacyReady = Boolean(llm.config?.llm?.endpoint);
+
+    if (!anyAgentReady && !legacyReady) {
+      // No agents / API — villagers use built-in wandering behavior
       this.showFallbackActionBubbles();
 
       // Generate some basic chronicle entries based on wandering
@@ -3324,7 +3410,31 @@ class Game {
 
         const rival = this.getRivalVillage(village.id);
         const worldState = this.buildWorldStateForVillage(village, rival);
-        const actions = await llm.generateVillagerActions(villageVillagers, worldState, timeState);
+        const agent = this.getDecisionAgent(village.id);
+        let actions = [];
+
+        // Route each tribe through its own agent (isolated LLM history or baseline)
+        if (agent?.type === 'baseline' && intentionalBaseline) {
+          actions = agent.generateVillagerActions(villageVillagers, worldState, timeState, this);
+        } else if (agent?.llm?.config?.llm?.endpoint) {
+          const start = Date.now();
+          try {
+            actions = await agent.llm.generateVillagerActions(villageVillagers, worldState, timeState);
+            if (agent.stats) {
+              agent.stats.calls += 1;
+              agent.stats.actionsGenerated += actions.length;
+              agent.stats.totalLatencyMs += Date.now() - start;
+              if (agent.llm.offline) agent.stats.failures += 1;
+            }
+          } catch (err) {
+            if (agent.stats) agent.stats.failures += 1;
+            actions = agent.llm.getFallbackVillagerActions(villageVillagers).actions;
+          }
+        } else if (legacyReady) {
+          actions = await llm.generateVillagerActions(villageVillagers, worldState, timeState);
+        } else {
+          continue;
+        }
 
         for (const rawAction of actions) {
         const action = this.sanitizeVillagerAction(rawAction);
@@ -3481,7 +3591,7 @@ class Game {
 
     // When an LLM endpoint is configured, villagers decide resource work themselves.
     // Skip rules-engine labor assignment and emergency stockpile grants.
-    if (this.usesLlmResourceDecisions()) return;
+    if (this.usesLlmResourceDecisions(village.id)) return;
 
     const foodRuleMultiplier = this.hasActiveRuleEffect('food_reserve', village.id) || this.hasActiveRuleEffect('farm_first', village.id) ? 1.45 : 1;
     const waterRuleMultiplier = this.hasActiveRuleEffect('water_priority', village.id) ? 1.45 : 1;
@@ -4840,7 +4950,13 @@ Respond with JSON: {
   }
 
   async requestVillageTechDecision(village) {
-    if (this.paused || !llm.config?.llm?.apiKey) return;
+    if (this.paused) return;
+
+    const agent = this.getDecisionAgent(village.id);
+    const llmClient = agent?.llm || (agent?.type === 'baseline' ? null : llm);
+    // Baseline can decide without API key; LLM needs endpoint (key optional for local)
+    if (agent?.type === 'llm' && !agent.llm?.config?.llm?.endpoint) return;
+    if (!agent && !llm.config?.llm?.apiKey && !llm.config?.llm?.endpoint) return;
 
     const techState = village.techState;
 
@@ -4868,7 +4984,12 @@ Respond with JSON: {
     };
 
     try {
-      const decision = await llm.generateTechDecision(worldState, techState, timeState);
+      let decision = null;
+      if (agent?.type === 'baseline' && typeof agent.generateTechDecision === 'function') {
+        decision = agent.generateTechDecision(worldState, techState, timeState);
+      } else if (llmClient) {
+        decision = await llmClient.generateTechDecision(worldState, techState, timeState);
+      }
       if (!decision) return;
 
       const resolvedTech = Utils.getTechDef(decision.techId);
