@@ -148,6 +148,9 @@ class Villager {
     if (this.needInterruptCooldown > 0) {
       this.needInterruptCooldown = Math.max(0, this.needInterruptCooldown - deltaTime);
     }
+    if (this.needSeekCooldown > 0) {
+      this.needSeekCooldown = Math.max(0, this.needSeekCooldown - deltaTime);
+    }
 
     // Update needs
     this.updateNeeds(deltaTime, villagers);
@@ -164,13 +167,17 @@ class Villager {
     // Update speech bubble
     this.updateSpeechBubble(deltaTime);
 
-    // Update activity duration
+    // Activity timers count milliseconds. Drinking, eating, and resting are not
+    // cleared when a short gather order expires — that was flipping status every frame.
     if (this.activityDuration > 0) {
       this.activityDuration -= deltaTime;
       if (this.activityDuration <= 0) {
-        this.status = CONSTANTS.ACTIVITY.IDLE;
-        this.activity = 'Idle';
         this.activityDuration = 0;
+        if (!this.isNeedLockedActivity()) {
+          this.status = CONSTANTS.ACTIVITY.IDLE;
+          this.activity = 'Idle';
+          this.currentAction = null;
+        }
       }
     }
 
@@ -191,18 +198,20 @@ class Villager {
   updateNeeds(deltaTime, villagers = []) {
     // Decay rates per game hour
     const hourFraction = deltaTime / (game?.timeState?.hourDuration || 600); // Assuming 10 min per hour
-    const isEatingOrDrinking =
-      this.status === CONSTANTS.ACTIVITY.EATING ||
-      this.status === CONSTANTS.ACTIVITY.DRINKING;
+    const stock = game?.getResources?.(this.villageId);
+    const canEat = this.status === CONSTANTS.ACTIVITY.EATING && (stock?.food || 0) > 0;
+    const canDrink = this.status === CONSTANTS.ACTIVITY.DRINKING && (stock?.water || 0) > 0;
     const isResting =
       this.status === CONSTANTS.ACTIVITY.SLEEPING ||
       this.status === CONSTANTS.ACTIVITY.RESTING;
 
     if (!isResting) {
       this.energy = Math.max(0, this.energy - CONSTANTS.NEED.REST_DECAY * hourFraction);
-      // Exempt eating/drinking from hunger/thirst decay (avoid double-hit while recovering)
-      if (!isEatingOrDrinking) {
+      // Skip decay only while a store is actually being consumed
+      if (!canEat) {
         this.hunger = Math.max(0, this.hunger - CONSTANTS.NEED.HUNGER_DECAY * hourFraction);
+      }
+      if (!canDrink) {
         this.thirst = Math.max(0, this.thirst - CONSTANTS.NEED.THIRST_DECAY * hourFraction);
       }
     } else {
@@ -327,6 +336,10 @@ class Villager {
       CONSTANTS.ACTIVITY.SCOUTING
     ];
     const midDurationWork = this.activityDuration > 0 && busyWorkStatuses.includes(this.status);
+    const resources = game?.getResources?.(this.villageId) || game?.resources || {};
+
+    // Hold drink/eat/rest until the bar recovers, before a gather timer can cancel it.
+    if (this.applyNeedRecoveryStatus(resources, midDurationWork)) return;
 
     // Don't clobber mid-duration LLM/work unless critically hungry/thirsty
     if (midDurationWork && !criticalHunger && !criticalThirst && !criticalEnergy) {
@@ -335,47 +348,6 @@ class Villager {
 
     // Cooldown after interrupting LLM work for needs
     if (this.needInterruptCooldown > 0 && !criticalHunger && !criticalThirst && !criticalEnergy) {
-      return;
-    }
-
-    const resources = game?.getResources?.(this.villageId) || game?.resources || {};
-
-    // Local reflex: drink only when critically dehydrated and stores exist
-    if (criticalThirst && (resources.water || 0) > 0) {
-      if (midDurationWork) this.needInterruptCooldown = 30000;
-      this.status = CONSTANTS.ACTIVITY.DRINKING;
-      this.activity = 'Desperate for water';
-      return;
-    }
-
-    // Local reflex: eat only when critically starving and stores exist
-    if (criticalHunger && (resources.food || 0) > 0) {
-      if (midDurationWork) this.needInterruptCooldown = 30000;
-      this.status = CONSTANTS.ACTIVITY.EATING;
-      this.activity = 'Desperate for food';
-      return;
-    }
-
-    // Local reflex: rest only when collapsing
-    if (criticalEnergy) {
-      if (midDurationWork) this.needInterruptCooldown = 30000;
-      this.status = CONSTANTS.ACTIVITY.RESTING;
-      this.activity = 'Collapsing from exhaustion';
-      return;
-    }
-
-    // No stores left — seek water/food; LLM normally prevents reaching this state
-    if (criticalThirst) {
-      if (midDurationWork) this.needInterruptCooldown = 30000;
-      this.status = CONSTANTS.ACTIVITY.GATHERING;
-      this.activity = 'Very thirsty, seeking water';
-      return;
-    }
-
-    if (criticalHunger) {
-      if (midDurationWork) this.needInterruptCooldown = 30000;
-      this.status = CONSTANTS.ACTIVITY.GATHERING;
-      this.activity = 'Very hungry, seeking food';
       return;
     }
 
@@ -402,6 +374,87 @@ class Villager {
       }
       return;
     }
+  }
+
+  /**
+   * Pin status to drinking, eating, or resting, and drop the previous labor order
+   * so the panel cannot keep showing a gather label.
+   * @param {string} status
+   * @param {string} activity
+   */
+  beginNeedActivity(status, activity) {
+    this.status = status;
+    this.activity = activity;
+    this.activityDuration = 0;
+    this.currentAction = { action: status, activity };
+    this.stopMoving();
+  }
+
+  /**
+   * Keep a critical drink, meal, or rest in place for this frame.
+   * @param {object} resources
+   * @param {boolean} midDurationWork
+   * @returns {boolean} true when the frame was handled
+   */
+  applyNeedRecoveryStatus(resources, midDurationWork) {
+    if (typeof NeedRecovery === 'undefined') return false;
+    const recovery = NeedRecovery.resolve(this, resources);
+    if (!recovery) return false;
+    if (midDurationWork) this.needInterruptCooldown = 30000;
+
+    if (recovery.mode === 'consume') {
+      const locked = NeedRecovery.consumeStatus(recovery);
+      if (!locked) return false;
+      if (this.status !== locked.status) {
+        this.beginNeedActivity(locked.status, locked.activity);
+      } else {
+        this.activityDuration = 0;
+        this.activity = locked.activity;
+        if (this.currentAction?.action !== locked.status) {
+          this.currentAction = { action: locked.status, activity: locked.activity };
+        }
+      }
+      return true;
+    }
+
+    if (recovery.kind === 'thirst') return this.seekCriticalResource('water');
+    if (recovery.kind === 'hunger') return this.seekCriticalResource('food');
+    return false;
+  }
+
+  /**
+   * Walk to water or food when stores are empty. Re-path on a short cooldown
+   * so the status does not restart the search every frame.
+   * @param {'water'|'food'} kind
+   * @returns {boolean}
+   */
+  seekCriticalResource(kind) {
+    this.activityDuration = 0;
+    const task = kind === 'water' ? 'water' : 'food';
+    const seekingLabel = kind === 'water' ? 'Collecting water' : 'Gathering food';
+
+    if (this.currentAction?.survivalTask === task && this.isMoving) {
+      this.status = CONSTANTS.ACTIVITY.GATHERING;
+      this.activity = seekingLabel;
+      return true;
+    }
+
+    if ((this.needSeekCooldown || 0) > 0) {
+      this.status = CONSTANTS.ACTIVITY.GATHERING;
+      this.activity = seekingLabel;
+      return true;
+    }
+
+    const assigned = kind === 'water'
+      ? game?.assignWaterWork?.(this)
+      : game?.assignFoodWork?.(this);
+    this.needSeekCooldown = 2000;
+    if (assigned) return true;
+
+    this.status = CONSTANTS.ACTIVITY.GATHERING;
+    this.activity = kind === 'water' ? 'Very thirsty, seeking water' : 'Very hungry, seeking food';
+    this.currentAction = { action: CONSTANTS.ACTIVITY.GATHERING, activity: this.activity, survivalTask: task };
+    return true;
   }
 
   updateMovement(deltaTime, world) {
@@ -882,7 +935,9 @@ class Villager {
     }
 
     if (action.duration) {
-      this.activityDuration = action.duration * 60; // Convert minutes to game seconds
+      // duration is game-minutes; the countdown subtracts milliseconds
+      const hourMs = game?.timeState?.hourDuration || 10000;
+      this.activityDuration = action.duration * (hourMs / 60);
     }
 
     if (action.speechEmoji) {

@@ -3179,55 +3179,49 @@ class Game {
   }
 
   /**
-   * True when the proposed action already addresses survival.
-   * @param {object} action
-   * @returns {boolean}
-   */
-  isSurvivalAction(action) {
-    const a = action?.action;
-    return a === CONSTANTS.ACTIVITY.EATING ||
-      a === CONSTANTS.ACTIVITY.DRINKING ||
-      a === CONSTANTS.ACTIVITY.GATHERING ||
-      a === CONSTANTS.ACTIVITY.RESTING ||
-      a === CONSTANTS.ACTIVITY.SLEEPING ||
-      a === CONSTANTS.ACTIVITY.HUNTING ||
-      a === CONSTANTS.ACTIVITY.FISHING;
-  }
-
-  /**
-   * Last-resort local override when the LLM assigns a non-survival action
-   * to a collapsing villager. Returns true if the LLM action was discarded.
+   * Last-resort local override when an assignment would pull a collapsing villager
+   * off a drink, meal, or rest. Gathering does not count as drinking.
+   * Returns true if the incoming action was discarded.
    * @param {object} villager
    * @param {object} action
    * @param {{ showBubble?: boolean }} options
    * @returns {boolean}
    */
   applyCriticalNeedReflex(villager, action, options = {}) {
-    if (!this.hasCriticalNeeds(villager)) return false;
-    if (this.isSurvivalAction(action)) return false;
+    if (!villager || typeof NeedRecovery === 'undefined') return false;
+
+    const resources = this.getResources(villager.villageId);
+    const recovery = NeedRecovery.resolve(villager, resources);
+    if (!recovery || NeedRecovery.allowsAction(action, recovery)) return false;
 
     const showBubble = options.showBubble === true;
-    const villageResources = this.getResources(villager.villageId);
+    if (recovery.mode === 'consume') {
+      const locked = NeedRecovery.consumeStatus(recovery);
+      if (locked) {
+        villager.beginNeedActivity(locked.status, locked.activity);
+        if (showBubble) {
+          const bubbles = {
+            thirst: ['💧', 'Needs water!'],
+            hunger: ['🍖', 'Needs food!'],
+            energy: ['😫', 'Needs rest!']
+          };
+          const bubble = bubbles[recovery.kind];
+          if (bubble) villager.showSpeechBubble(bubble[0], bubble[1]);
+        }
+      }
+      return true;
+    }
 
-    if ((villager.thirst ?? 100) < (CONSTANTS.NEED.CRITICAL_THIRST ?? 25) && villageResources.water > 0) {
-      villager.status = CONSTANTS.ACTIVITY.DRINKING;
-      villager.activity = 'Desperate for water';
+    if (recovery.kind === 'thirst') {
+      this.assignWaterWork(villager);
       if (showBubble) villager.showSpeechBubble('💧', 'Needs water!');
       return true;
     }
-    if (villager.hunger < (CONSTANTS.NEED.CRITICAL_HUNGER ?? 25) && villageResources.food > 0) {
-      villager.status = CONSTANTS.ACTIVITY.EATING;
-      villager.activity = 'Desperate for food';
+    if (recovery.kind === 'hunger') {
+      this.assignFoodWork(villager);
       if (showBubble) villager.showSpeechBubble('🍖', 'Needs food!');
       return true;
     }
-    if (villager.energy < (CONSTANTS.NEED.CRITICAL_ENERGY ?? 15)) {
-      villager.status = CONSTANTS.ACTIVITY.RESTING;
-      villager.activity = 'Collapsing from exhaustion';
-      if (showBubble) villager.showSpeechBubble('😫', 'Needs rest!');
-      return true;
-    }
-    // Critically needy with empty stores — skip non-survival LLM pick
     return true;
   }
 
