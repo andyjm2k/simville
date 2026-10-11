@@ -81,6 +81,10 @@ class Game {
 
     // Interactive dual-agent registry (separate LLM clients per village)
     this.villageAgents = typeof VillageAgents !== 'undefined' ? new VillageAgents() : null;
+
+    // Set when every villager has died and the end-of-run dashboard is up
+    this.simulationOver = false;
+    this.simulationReport = null;
   }
 
   // Get village by ID
@@ -426,6 +430,45 @@ class Game {
     return this.villagers.filter(v => v.villageId === villageId);
   }
 
+  // Living headcount helper used by the HUD and the extinction check
+  ensureSimulationReport() {
+    if (typeof SimulationReport === 'undefined') return null;
+    if (!this.simulationReport || this.simulationReport.game !== this) {
+      this.simulationReport = new SimulationReport(this);
+    }
+    return this.simulationReport;
+  }
+
+  // Keep tribe rosters and peak counts aligned with people who are still alive
+  refreshLivingPopulation() {
+    const report = this.ensureSimulationReport();
+    if (!report) return;
+    report.recordPeaks();
+    report.syncRosters();
+  }
+
+  // Stop the clock and open the statistics dashboard once nobody is left
+  checkExtinction() {
+    if (this.benchmarkMode || this.simulationOver) return;
+    if (!this.world || !this.villages?.length) return;
+    const report = this.ensureSimulationReport();
+    if (!report || !report.isExtinct()) return;
+
+    this.simulationOver = true;
+    this.paused = true;
+    const summary = report.buildSummary();
+    if (this.ui?.updateHUD && this.economy) {
+      this.ui.updateHUD(
+        this.timeState,
+        this.getHudResources(),
+        this.paused,
+        this.villages,
+        this.getSelectedVillage()
+      );
+    }
+    this.ui?.showSimulationDashboard?.(summary);
+  }
+
   // Calculate village strength for war/comparison
   calculateVillageStrength(villageId) {
     const village = this.getVillage(villageId);
@@ -488,8 +531,11 @@ class Game {
         adult.isChieftan = true;
         adult.title = 'Chieftan';
       }
-      // Set conquest baseline
+      // Set conquest baseline and the population peak used by the end screen
       village.originalPopulation = villagers.length;
+      if (!Number.isFinite(village.peakPopulation) || villagers.length > village.peakPopulation) {
+        village.peakPopulation = villagers.length;
+      }
     });
   }
 
@@ -1135,6 +1181,9 @@ class Game {
 
   newWorld() {
     console.log('newWorld: Starting');
+    // A new world clears the extinction lock and the statistics dashboard
+    this.simulationOver = false;
+    this.ui?.hideSimulationDashboard?.();
     // Generate new world (creates 2 village centers)
     this.world = new World(64);
     this.world.generate();
@@ -1560,6 +1609,8 @@ class Game {
   }
 
   togglePause() {
+    // A finished run stays stopped until the player starts a new world
+    if (this.simulationOver) return;
     this.paused = !this.paused;
   }
 
@@ -1571,7 +1622,7 @@ class Game {
     const deltaTime = currentTime - this.lastTick;
     this.lastTick = currentTime;
 
-    if (!this.paused) {
+    if (!this.paused && !this.simulationOver) {
       this.update(deltaTime);
     }
 
@@ -1581,6 +1632,7 @@ class Game {
   }
 
   update(deltaTime) {
+    if (this.simulationOver) return;
     const scaledDelta = deltaTime * this.simSpeed;
 
     // Store previous time for transition detection
@@ -1644,6 +1696,9 @@ class Game {
     // Process chieftan diplomatic decisions
     this.processChieftanDecisions();
 
+    // Drop dead people out of tribe rosters before the HUD reads population
+    this.refreshLivingPopulation();
+
     // Get active village's resources for HUD (or first village)
     const displayResources = this.getHudResources();
 
@@ -1675,8 +1730,12 @@ class Game {
       this.ui.updateFamilyList?.(this.selectedVillager);
     }
 
-    // Check for villager deaths
+    // Apply deaths this frame so the counters can fall below the starting five immediately
     this.checkDeaths();
+    this.processEventQueue();
+    this.refreshLivingPopulation();
+    this.ui.updateHUD(this.timeState, this.getHudResources(), this.paused, this.villages, this.getSelectedVillage());
+    this.checkExtinction();
 
     // Auto-save once near the start of each in-game day.
     if (this.timeState.day !== this.lastAutoSaveDay &&
@@ -4361,6 +4420,8 @@ Respond with JSON: {
   // Remove villager without funeral (for raids, conquest, etc.)
   removeVillager(villager, causeOfDeath = 'killed in conflict') {
     villager.causeOfDeath = causeOfDeath;
+    // Raid and conquest losses still count toward the end-of-run death tally
+    this.incrementChronicleStat('deaths', villager.villageId);
 
     // Remove from villagers
     const index = this.villagers.indexOf(villager);
@@ -5556,7 +5617,15 @@ Respond with JSON: {
       this.nextChieftanDecision = saveData.nextChieftanDecision || {};
       this.hostileDaysCount = saveData.hostileDaysCount || {};
       this.hudVillageId = saveData.hudVillageId || this.villages[0]?.id || null;
+      this.simulationOver = false;
+      this.ui?.hideSimulationDashboard?.();
       this.ui?.updateTribeSelector?.(this.villages, this.hudVillageId);
+      this.refreshLivingPopulation();
+      // Finish deaths that were saved mid-collapse so the dashboard tally includes them
+      this.checkDeaths();
+      this.processEventQueue();
+      this.refreshLivingPopulation();
+      this.checkExtinction();
 
       // Center camera on selected tribe
       const focusVillage = this.getSelectedVillage();
