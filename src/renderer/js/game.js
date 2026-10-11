@@ -3614,6 +3614,7 @@ class Game {
         v.energy > 25 &&
         v.lifeStage?.canWork !== false &&
         v.status !== CONSTANTS.ACTIVITY.EATING &&
+        v.status !== CONSTANTS.ACTIVITY.DRINKING &&
         v.status !== CONSTANTS.ACTIVITY.SLEEPING &&
         v.status !== CONSTANTS.ACTIVITY.RESTING &&
         v.status !== CONSTANTS.ACTIVITY.SOCIALIZING &&

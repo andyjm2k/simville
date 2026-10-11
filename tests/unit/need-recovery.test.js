@@ -216,6 +216,20 @@ describe('drinking is not interrupted by gathering', () => {
     expect(villager.thirst).toBeGreaterThan(30);
   });
 
+  it('rules-engine labor leaves an unfinished drink alone', () => {
+    const previous = llm.config?.llm?.endpoint || '';
+    llm.config = llm.config || { llm: {} };
+    llm.config.llm = { ...(llm.config.llm || {}), endpoint: '' };
+    const villager = prepare(40, 12, CONSTANTS.ACTIVITY.DRINKING);
+    villager.activity = 'Drinking water';
+    expect(game.usesLlmResourceDecisions(villager.villageId)).toBe(false);
+
+    game.runVillageSurvivalBehaviors(game.getVillage(villager.villageId));
+
+    expect(villager.status).toBe(CONSTANTS.ACTIVITY.DRINKING);
+    llm.config.llm.endpoint = previous;
+  });
+
   it('stores action duration in milliseconds of game time', () => {
     const villager = prepare(90, 10, CONSTANTS.ACTIVITY.IDLE);
     game.timeState.hourDuration = 60000;
