@@ -277,9 +277,129 @@ class UIManager {
 
   closeAllPanels() {
     document.querySelectorAll('.panel, .dialog').forEach(panel => {
+      // The extinction dashboard stays up until the player dismisses it or starts over
+      if (panel.dataset.sticky === 'extinction') return;
       panel.classList.add('hidden');
     });
     this.activePanel = null;
+  }
+
+  /**
+   * The game object the HUD should read. Tests and the page both publish it on window.
+   * @returns {object|null}
+   */
+  getHudGame() {
+    if (typeof window !== 'undefined' && window.game) return window.game;
+    if (typeof game !== 'undefined' && game) return game;
+    return null;
+  }
+
+  /**
+   * Living people in one tribe. Dead villagers are excluded so the count can fall below the starting five.
+   * The stored villager id list is only a fallback when the live roster has not been created yet.
+   * @param {object|null} village
+   * @param {object|null} activeGame
+   * @returns {number}
+   */
+  countLivingPopulation(village = null, activeGame = this.getHudGame()) {
+    const villagers = activeGame?.villagers;
+    if (Array.isArray(villagers)) {
+      return villagers.filter((villager) => {
+        if ((villager?.health ?? 100) <= 0) return false;
+        if (village && villager.villageId !== village.id) return false;
+        return true;
+      }).length;
+    }
+    if (!village) return 0;
+    return village.villagerIds?.length || 0;
+  }
+
+  /**
+   * Refresh the count on each tribe button without rebuilding the buttons.
+   * Rebuilding every frame would drop clicks; the labels still track deaths below five.
+   * @param {object[]} villages
+   * @param {object|null} activeGame
+   */
+  refreshTribePopulationLabels(villages = [], activeGame = this.getHudGame()) {
+    const container = this.elements?.tribeSelector;
+    if (!container) return;
+    const buttons = container.querySelectorAll('.tribe-btn');
+    if (!buttons.length || buttons.length !== villages.length) return;
+
+    villages.forEach((village, index) => {
+      const button = buttons[index];
+      const label = button?.querySelector('.tribe-pop');
+      if (!label) return;
+      const count = this.countLivingPopulation(village, activeGame);
+      label.textContent = `(${count})`;
+      button.classList.toggle('tribe-empty', count === 0);
+    });
+  }
+
+  /**
+   * Create the end-of-run dialog if the page did not include one, and bind its buttons once.
+   * @returns {HTMLElement}
+   */
+  ensureExtinctionDialog() {
+    let dialog = document.getElementById('extinction-dialog');
+    if (!dialog) {
+      dialog = document.createElement('div');
+      dialog.id = 'extinction-dialog';
+      dialog.className = 'dialog hidden';
+      dialog.dataset.sticky = 'extinction';
+      dialog.setAttribute('role', 'dialog');
+      dialog.setAttribute('aria-modal', 'true');
+      dialog.setAttribute('aria-labelledby', 'extinction-title');
+      dialog.innerHTML = `
+        <div class="dialog-content extinction-panel">
+          <div class="dialog-header">
+            <span id="extinction-title">Simulation ended</span>
+            <button class="btn-close" data-close="extinction-dialog" type="button">×</button>
+          </div>
+          <div id="extinction-body" class="extinction-body"></div>
+          <div class="dialog-footer">
+            <button type="button" class="btn-secondary" id="btn-extinction-dismiss">Dismiss</button>
+            <button type="button" class="btn-primary" id="btn-extinction-new">New World</button>
+          </div>
+        </div>
+      `;
+      const host = document.getElementById('game-container') || document.body;
+      host.appendChild(dialog);
+    }
+
+    if (!dialog.dataset.bound) {
+      dialog.dataset.bound = '1';
+      dialog.querySelectorAll('[data-close], #btn-extinction-dismiss').forEach((button) => {
+        button.addEventListener('click', () => this.hideSimulationDashboard());
+      });
+      dialog.querySelector('#btn-extinction-new')?.addEventListener('click', () => {
+        this.hideSimulationDashboard();
+        const activeGame = this.getHudGame();
+        activeGame?.newWorld?.();
+      });
+    }
+    return dialog;
+  }
+
+  /**
+   * Pop the statistics dashboard. The simulation is already paused by the caller.
+   * @param {object} summary
+   */
+  showSimulationDashboard(summary) {
+    const dialog = this.ensureExtinctionDialog();
+    const body = dialog.querySelector('#extinction-body') || dialog.querySelector('.extinction-body');
+    const report = this.getHudGame()?.simulationReport;
+    const html = report?.toHtml ? report.toHtml(summary) : (typeof SimulationReport !== 'undefined'
+      ? new SimulationReport(this.getHudGame() || {}).toHtml(summary)
+      : '<p>Every villager has died.</p>');
+    if (body) body.innerHTML = html;
+    dialog.classList.remove('hidden');
+  }
+
+  /** Hide the statistics dashboard without resuming a finished simulation. */
+  hideSimulationDashboard() {
+    const dialog = document.getElementById('extinction-dialog');
+    if (dialog) dialog.classList.add('hidden');
   }
 
   showToast(message, isError = false, duration = 3000) {
@@ -326,20 +446,24 @@ class UIManager {
     if (this.elements.resFish) this.elements.resFish.textContent = this.formatResourceAmount(resources.fish);
     if (this.elements.resThatch) this.elements.resThatch.textContent = this.formatResourceAmount(resources.thatch);
     if (this.elements.resRareMaterials) this.elements.resRareMaterials.textContent = this.formatResourceAmount(resources.rareMaterials);
-    this.elements.resPopulation.textContent = window.game?.villagers?.length || 0;
 
     if (activeVillage) {
-      const tribePop = activeVillage.villagerIds?.length || 0;
-      this.elements.resPopulation.textContent = tribePop;
       if (this.elements.tribeLabel) {
         this.elements.tribeLabel.textContent = activeVillage.name;
         this.elements.tribeLabel.style.color = activeVillage.getColor?.() || 'var(--text-primary)';
       }
       this.updateTribePanelTitles(activeVillage);
-    } else if (villages.length > 1) {
-      const totalPop = villages.reduce((sum, v) => sum + (v.villagerIds?.length || 0), 0);
-      this.elements.resPopulation.textContent = totalPop;
     }
+
+    // Selected tribe's living count. Both tribe buttons are refreshed just below.
+    const shownPopulation = activeVillage
+      ? this.countLivingPopulation(activeVillage)
+      : villages.reduce((sum, village) => sum + this.countLivingPopulation(village), 0);
+    if (this.elements.resPopulation) {
+      this.elements.resPopulation.textContent = String(shownPopulation);
+      this.elements.resPopulation.parentElement?.classList.toggle('is-zero', shownPopulation === 0);
+    }
+    this.refreshTribePopulationLabels(villages);
 
     // LLM offline / online indicator (any interactive agent LLM)
     if (this.elements.llmStatus) {
@@ -752,7 +876,9 @@ class UIManager {
       btn.className = 'tribe-btn' + (village.id === selectedVillageId ? ' active' : '');
       btn.dataset.villageId = village.id;
       btn.style.borderColor = village.getColor?.() || 'var(--border-color)';
-      btn.innerHTML = `<span class="tribe-dot" style="background:${village.getColor?.() || '#fff'}"></span>${Utils.escapeHtml(village.name)} <small>(${village.villagerIds?.length || 0})</small>`;
+      const tribePop = this.countLivingPopulation(village);
+      btn.innerHTML = `<span class="tribe-dot" style="background:${village.getColor?.() || '#fff'}"></span>${Utils.escapeHtml(village.name)} <small class="tribe-pop">(${tribePop})</small>`;
+      btn.classList.toggle('tribe-empty', tribePop === 0);
       btn.addEventListener('click', () => {
         game?.setSelectedVillage(village.id);
         game?.worldRenderer?.centerOn(village.center.x, village.center.y);

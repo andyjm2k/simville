@@ -361,6 +361,21 @@
     <div id="toast" class="toast hidden">
       <span id="toast-message"></span>
     </div>
+
+    <!-- Shown when every villager has died and the simulation stops -->
+    <div id="extinction-dialog" class="dialog hidden" data-sticky="extinction" role="dialog" aria-modal="true" aria-labelledby="extinction-title">
+      <div class="dialog-content extinction-panel">
+        <div class="dialog-header">
+          <span id="extinction-title">Simulation ended</span>
+          <button class="btn-close" data-close="extinction-dialog" type="button">×</button>
+        </div>
+        <div id="extinction-body" class="extinction-body"></div>
+        <div class="dialog-footer">
+          <button type="button" class="btn-secondary" id="btn-extinction-dismiss">Dismiss</button>
+          <button type="button" class="btn-primary" id="btn-extinction-new">New World</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="js/utils.js"></script>
@@ -385,6 +400,7 @@
   <script src="js/systems/benchmark.js"></script>
   <script src="js/systems/village-agents.js"></script>
   <script src="js/systems/need-recovery.js"></script>
+  <script src="js/systems/simulation-report.js"></script>
   <script src="js/game.js"></script>
 </body>
 </html>

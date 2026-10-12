@@ -144,6 +144,10 @@ body {
   color: var(--success);
 }
 
+.population.is-zero {
+  color: var(--accent);
+}
+
 .tribe-label {
   font-weight: bold;
   padding: 4px 10px;
@@ -198,6 +202,10 @@ body {
 
 .tribe-btn small {
   color: var(--text-secondary);
+}
+
+.tribe-btn.tribe-empty small {
+  color: var(--accent);
 }
 
 /* ===== Game Canvas ===== */
@@ -987,6 +995,125 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
+}
+
+/* ===== Extinction dashboard ===== */
+#extinction-dialog .extinction-panel {
+  width: min(880px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: 86vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.extinction-body {
+  padding: 16px;
+  overflow: auto;
+}
+
+#extinction-dialog .dialog-footer {
+  margin-top: 0;
+  padding: 0 16px 16px;
+}
+
+.extinction-lead {
+  margin-bottom: 4px;
+  font-size: 16px;
+}
+
+.extinction-when {
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+
+.extinction-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.extinction-total {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.extinction-total span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.extinction-total strong {
+  font-size: 18px;
+  color: var(--success);
+}
+
+.extinction-tribes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 12px;
+}
+
+.extinction-tribe {
+  border: 2px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  min-width: 0;
+}
+
+.extinction-tribe h3 {
+  margin-bottom: 6px;
+}
+
+.extinction-pop {
+  margin-bottom: 8px;
+}
+
+.extinction-pop span,
+.extinction-resources,
+.extinction-techs,
+.extinction-events {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.extinction-stats {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.extinction-stats li {
+  margin-bottom: 2px;
+}
+
+.extinction-events {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.extinction-events li {
+  margin-bottom: 4px;
+}
+
+@media (max-width: 720px) {
+  .extinction-totals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .extinction-tribes {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ===== Utility ===== */
