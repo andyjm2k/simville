@@ -620,7 +620,9 @@ class Game {
       rivalDiscovered: this.explorationSystem?.hasDiscovered(village, otherVillage) || false
     };
 
-    if (!context.rivalDiscovered) {
+    // Offline villages still send a scout on their own. An owned village must
+    // choose "observe" so the scout is that agent's decision.
+    if (!context.rivalDiscovered && !this.agentOwnsVillagerActions(villageId)) {
       this.explorationSystem?.dispatchScout(village, otherVillage, 'chieftan_order');
       this.diplomaticEvents.push({
         type: 'observe',
@@ -2379,7 +2381,7 @@ class Game {
   isVillageStableForFamilyGrowth(requireHousingRoom = true) {
     if (this.villagers.length < 2) return false;
     if (requireHousingRoom && this.villagers.length + this.getExpectedBirthCount() >= this.getPopulationCapacity()) {
-      if (this.canAffordStructure(CONSTANTS.STRUCTURE.HUT)) {
+      if (!this.agentOwnsVillagerActions() && this.canAffordStructure(CONSTANTS.STRUCTURE.HUT)) {
         this.startConstructionProject('hut', { source: 'family_growth' });
       }
       return false;
@@ -2578,7 +2580,7 @@ class Game {
       const goal = villager.goals.find(g => !g.completed && !g.failed);
       if (!goal || !this.canPursuePersonalGoal(villager)) return;
       // LLM-owned tribes choose labor themselves. Goals stay on the record.
-      if (this.usesLlmResourceDecisions(villager.villageId)) return;
+      if (this.agentOwnsVillagerActions(villager.villageId)) return;
 
       const alreadyPursuedToday = goal.lastPursuedDay === this.timeState.day;
       const shouldPursue = !alreadyPursuedToday || Math.random() < 0.08;
@@ -3103,8 +3105,8 @@ class Game {
   }
 
   /**
-   * Start an LLM action now, or queue it until the current one finishes.
-   * Rule reflexes run only when no LLM endpoint owns the village.
+   * Start an agent action now, or queue it until the current one finishes.
+   * Rule reflexes run only for villages no decision agent owns.
    * @param {object} villager
    * @param {object} action
    * @param {object[]|null} [notableEvents]
@@ -3114,10 +3116,10 @@ class Game {
     if (!villager || !action) return false;
     if (villager.isScouting && !this.hasCriticalNeeds(villager)) return false;
 
-    const llmOwned = this.usesLlmResourceDecisions(villager.villageId);
-    if (!llmOwned && this.applyCriticalNeedReflex(villager, action)) return false;
+    const agentOwned = this.agentOwnsVillagerActions(villager.villageId);
+    if (!agentOwned && this.applyCriticalNeedReflex(villager, action)) return false;
 
-    if (llmOwned && villager.isActionInProgress?.()) {
+    if (agentOwned && villager.isActionInProgress?.()) {
       villager.enqueueAction(action);
       return true;
     }
@@ -3193,6 +3195,18 @@ class Game {
   }
 
   /**
+   * True when villager labor must come from the decision agent.
+   * Rules must not gather, drink, build, or scout on the agent's behalf.
+   * Benchmarks always qualify so a heuristic opponent is not helped by hidden labor.
+   * @param {string} [villageId]
+   * @returns {boolean}
+   */
+  agentOwnsVillagerActions(villageId) {
+    if (this.benchmarkMode) return true;
+    return this.usesLlmResourceDecisions(villageId);
+  }
+
+  /**
    * True when resource labor is agent-owned (LLM endpoint or attached decision agent).
    * Pass villageId for per-tribe checks; omit for "any tribe uses LLM endpoint".
    * @param {string} [villageId]
@@ -3244,7 +3258,7 @@ class Game {
   applyCriticalNeedReflex(villager, action, options = {}) {
     if (!villager || typeof NeedRecovery === 'undefined') return false;
     // Drinking and other labor stay with the LLM. Queueing handles the next order.
-    if (this.usesLlmResourceDecisions(villager.villageId)) return false;
+    if (this.agentOwnsVillagerActions(villager.villageId)) return false;
 
     const resources = this.getResources(villager.villageId);
     const recovery = NeedRecovery.resolve(villager, resources);
@@ -3554,7 +3568,7 @@ class Game {
 
     // When an LLM endpoint is configured, villagers decide resource work themselves.
     // Skip rules-engine labor assignment and emergency stockpile grants.
-    if (this.usesLlmResourceDecisions(village.id)) return;
+    if (this.agentOwnsVillagerActions(village.id)) return;
 
     const foodRuleMultiplier = this.hasActiveRuleEffect('food_reserve', village.id) || this.hasActiveRuleEffect('farm_first', village.id) ? 1.45 : 1;
     const waterRuleMultiplier = this.hasActiveRuleEffect('water_priority', village.id) ? 1.45 : 1;
@@ -4629,8 +4643,10 @@ Respond with JSON: {
     // Hard benchmarks: do not let the rules engine grow the village for the agent
     if (this.benchmarkMode && !this.allowAutonomousBuild) return;
 
-    // Plan at most one project per tick, but evaluate each tribe's own stockpile
+    // Plan at most one project per tick, but evaluate each tribe's own stockpile.
+    // Agent-owned tribes build only when their decision agent orders it.
     for (const village of this.villages) {
+      if (this.agentOwnsVillagerActions(village.id)) continue;
       const villageProjects = this.constructionProjects.filter(p => p.villageId === village.id);
       if (villageProjects.length > 0) continue;
 
@@ -4768,16 +4784,16 @@ Respond with JSON: {
     const completed = [];
     this.constructionProjects.forEach(project => {
       let builder = this.villagers.find(v => v.id === project.builderId && v.health > 0);
+      const agentOwns = this.agentOwnsVillagerActions(project.villageId);
       if (!builder || builder.lifeStage?.canWork === false) {
+        if (agentOwns) return;
         builder = this.selectBuilder(null, project.villageId);
         project.builderId = builder?.id || null;
       }
       if (!builder) return;
 
-      const llmBusy = this.usesLlmResourceDecisions(builder.villageId) &&
-        builder.isActionInProgress?.() &&
-        builder.currentAction?.action !== CONSTANTS.ACTIVITY.BUILDING;
-      if (llmBusy) return;
+      // Do not pull an agent-owned villager onto the site unless they were told to build.
+      if (agentOwns && builder.currentAction?.action !== CONSTANTS.ACTIVITY.BUILDING) return;
 
       builder.status = CONSTANTS.ACTIVITY.BUILDING;
       builder.activity = `Building ${project.name}`;
@@ -4845,7 +4861,7 @@ Respond with JSON: {
         v.status !== CONSTANTS.ACTIVITY.SLEEPING &&
         v.status !== CONSTANTS.ACTIVITY.EATING &&
         v.status !== CONSTANTS.ACTIVITY.DRINKING &&
-        !(this.usesLlmResourceDecisions(v.villageId) && v.isActionInProgress?.())
+        !(this.agentOwnsVillagerActions(v.villageId) && v.isActionInProgress?.())
       )
       .sort((a, b) => (b.skills.crafting || 0) - (a.skills.crafting || 0));
 

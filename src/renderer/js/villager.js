@@ -293,7 +293,7 @@ class Villager {
     }
 
     // An LLM endpoint owns drinking, eating, and labor. Local rules must not replace that.
-    if (game?.usesLlmResourceDecisions?.(this.villageId)) return;
+    if (game?.agentOwnsVillagerActions?.(this.villageId)) return;
 
     if (this.status === CONSTANTS.ACTIVITY.DRINKING && this.thirst >= 85) {
       this.status = CONSTANTS.ACTIVITY.IDLE;
@@ -621,6 +621,7 @@ class Villager {
 
   startWandering(world) {
     if (this.isScouting) return;
+    if (game?.agentOwnsVillagerActions?.(this.villageId)) return;
 
     const village = game?.getVillage?.(this.villageId);
     const anchor = village?.center || { x: Math.round(this.x), y: Math.round(this.y) };
