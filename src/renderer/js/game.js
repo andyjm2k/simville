@@ -2577,6 +2577,8 @@ class Game {
 
       const goal = villager.goals.find(g => !g.completed && !g.failed);
       if (!goal || !this.canPursuePersonalGoal(villager)) return;
+      // LLM-owned tribes choose labor themselves. Goals stay on the record.
+      if (this.usesLlmResourceDecisions(villager.villageId)) return;
 
       const alreadyPursuedToday = goal.lastPursuedDay === this.timeState.day;
       const shouldPursue = !alreadyPursuedToday || Math.random() < 0.08;
@@ -3089,53 +3091,105 @@ class Game {
 
   applyVillagerActions(actions) {
     let applied = 0;
-    const notableEvents = [];
 
     for (const rawAction of actions || []) {
       const action = this.sanitizeVillagerAction(rawAction);
       const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
       if (!villager) continue;
-
-      // Critical collapse only — mild needs stay under LLM/persona control
-      if (this.applyCriticalNeedReflex(villager, action)) continue;
-      if (villager.isScouting && !this.hasCriticalNeeds(villager)) continue;
-
-      const socialResult = this.applySocialVillagerAction(villager, action);
-      if (socialResult) {
-        applied += 1;
-        continue;
-      }
-
-      villager.applyAction(action);
-      applied += 1;
-
-      if (action.moveTo) {
-        villager.moveTo(action.moveTo.x, action.moveTo.y, this.world);
-      }
-
-      if (action.action === 'gathering') {
-        this.handleGathering(villager, action.resourceType || action.target);
-      }
-      if (action.action === 'hunting') {
-        this.handleHunting(villager);
-      }
-      if (action.action === 'fishing') {
-        this.handleFishing(villager);
-      }
-      if (action.action === 'drinking') {
-        villager.status = CONSTANTS.ACTIVITY.DRINKING;
-        villager.activity = 'Drinking from village water stores';
-      }
-      if (action.action === 'building') {
-        const requestedStructure = this.normalizeStructureType(action.structure || action.structureType || action.target) ||
-          this.chooseNeededStructure();
-        if (requestedStructure) {
-          this.startConstructionProject(requestedStructure, { source: 'villager', builderId: villager.id });
-        }
-      }
+      if (this.scheduleVillagerAction(villager, action)) applied += 1;
     }
 
     return applied;
+  }
+
+  /**
+   * Start an LLM action now, or queue it until the current one finishes.
+   * Rule reflexes run only when no LLM endpoint owns the village.
+   * @param {object} villager
+   * @param {object} action
+   * @param {object[]|null} [notableEvents]
+   * @returns {boolean} true when the action was started or queued
+   */
+  scheduleVillagerAction(villager, action, notableEvents = null) {
+    if (!villager || !action) return false;
+    if (villager.isScouting && !this.hasCriticalNeeds(villager)) return false;
+
+    const llmOwned = this.usesLlmResourceDecisions(villager.villageId);
+    if (!llmOwned && this.applyCriticalNeedReflex(villager, action)) return false;
+
+    if (llmOwned && villager.isActionInProgress?.()) {
+      villager.enqueueAction(action);
+      return true;
+    }
+
+    this.startScheduledAction(villager, action, notableEvents);
+    return true;
+  }
+
+  /**
+   * Apply one action and its movement or harvest side effects.
+   * @param {object} villager
+   * @param {object} action
+   * @param {object[]|null} [notableEvents]
+   */
+  startScheduledAction(villager, action, notableEvents = null) {
+    const socialResult = this.applySocialVillagerAction(villager, action);
+    if (socialResult) {
+      if (socialResult.notable && notableEvents) notableEvents.push(socialResult.notable);
+      return;
+    }
+
+    villager.applyAction(action);
+
+    if (action.moveTo) {
+      villager.moveTo(action.moveTo.x, action.moveTo.y, this.world);
+    }
+
+    if (action.action === 'gathering') {
+      const gathered = this.handleGathering(villager, action.resourceType || action.target);
+      if (gathered > 0) villager.showSpeechBubble('💪', 'Gathering resources');
+    }
+    if (action.action === 'hunting') {
+      const hunted = this.handleHunting(villager);
+      if (hunted > 0) {
+        villager.showSpeechBubble('🏹', 'Hunting');
+        if (notableEvents) {
+          notableEvents.push({
+            text: `${villager.name} returns from hunting with food!`,
+            type: 'normal'
+          });
+        }
+      }
+    }
+    if (action.action === 'fishing') {
+      const fished = this.handleFishing(villager);
+      if (fished > 0) {
+        villager.showSpeechBubble('🎣', 'Fishing');
+        if (notableEvents) {
+          notableEvents.push({
+            text: `${villager.name} caught fish at the river!`,
+            type: 'normal'
+          });
+        }
+      }
+    }
+    if (action.action === 'drinking') {
+      villager.status = CONSTANTS.ACTIVITY.DRINKING;
+      villager.activity = 'Drinking from village water stores';
+      villager.showSpeechBubble('💧', action.speechTheme || 'Drinking');
+    }
+    if (action.action === 'building') {
+      const requestedStructure = this.normalizeStructureType(action.structure || action.structureType || action.target) ||
+        this.chooseNeededStructure();
+      if (requestedStructure && this.startConstructionProject(requestedStructure, { source: 'villager', builderId: villager.id })) {
+        if (notableEvents) {
+          notableEvents.push({
+            text: `${villager.name} marked out ground for a new ${requestedStructure}.`,
+            type: 'normal'
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -3189,6 +3243,8 @@ class Game {
    */
   applyCriticalNeedReflex(villager, action, options = {}) {
     if (!villager || typeof NeedRecovery === 'undefined') return false;
+    // Drinking and other labor stay with the LLM. Queueing handles the next order.
+    if (this.usesLlmResourceDecisions(villager.villageId)) return false;
 
     const resources = this.getResources(villager.villageId);
     const recovery = NeedRecovery.resolve(villager, resources);
@@ -3431,97 +3487,10 @@ class Game {
         }
 
         for (const rawAction of actions) {
-        const action = this.sanitizeVillagerAction(rawAction);
-        const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
-        if (villager) {
-          // Critical collapse only — mild needs stay under LLM/persona control
-          if (this.applyCriticalNeedReflex(villager, action, { showBubble: true })) continue;
-          if (villager.isScouting && !this.hasCriticalNeeds(villager)) continue;
-
-          const socialResult = this.applySocialVillagerAction(villager, action);
-          if (socialResult) {
-            if (socialResult.notable) notableEvents.push(socialResult.notable);
-            continue;
-          }
-
-          villager.applyAction(action);
-
-          // Handle movement
-          if (action.moveTo) {
-            villager.moveTo(action.moveTo.x, action.moveTo.y, this.world);
-          }
-
-          // Handle gathering -villagers find and harvest resources
-          if (action.action === 'gathering') {
-            const gathered = this.handleGathering(villager, action.resourceType || action.target);
-            if (gathered > 0) {
-              villager.showSpeechBubble('💪', 'Gathering resources');
-            }
-          }
-
-          // Handle hunting - villagers hunt for food
-          if (action.action === 'hunting') {
-            const hunted = this.handleHunting(villager);
-            if (hunted > 0) {
-              notableEvents.push({
-                text: `${villager.name} returns from hunting with food!`,
-                type: 'normal'
-              });
-              villager.showSpeechBubble('🏹', 'Hunting');
-            }
-          }
-
-          // Handle fishing
-          if (action.action === 'fishing') {
-            const fished = this.handleFishing(villager);
-            if (fished > 0) {
-              notableEvents.push({
-                text: `${villager.name} caught fish at the river!`,
-                type: 'normal'
-              });
-              villager.showSpeechBubble('🎣', 'Fishing');
-            }
-          }
-
-          if (action.action === 'drinking') {
-            villager.status = CONSTANTS.ACTIVITY.DRINKING;
-            villager.activity = 'Drinking from village water stores';
-            villager.showSpeechBubble('💧', action.speechTheme || 'Drinking');
-          }
-
-          if (action.action === 'building') {
-            const requestedStructure = this.normalizeStructureType(action.structure || action.structureType || action.target) ||
-              this.chooseNeededStructure();
-            if (requestedStructure && this.startConstructionProject(requestedStructure, { source: 'villager', builderId: villager.id })) {
-              notableEvents.push({
-                text: `${villager.name} marked out ground for a new ${requestedStructure}.`,
-                type: 'normal'
-              });
-            }
-          }
-
-          // Record work activities occasionally
-          if (action.action === 'building' && Math.random() < 0.3) {
-            notableEvents.push({
-              text: `${villager.name} is constructing something new for the village.`,
-              type: 'normal'
-            });
-          }
-
-          if (action.action === 'hunting' && Math.random() < 0.3) {
-            notableEvents.push({
-              text: `${villager.name} stalks prey in the jungle.`,
-              type: 'normal'
-            });
-          }
-
-          if (action.action === 'fishing' && Math.random() < 0.3) {
-            notableEvents.push({
-              text: `${villager.name} casts their net into the river.`,
-              type: 'normal'
-            });
-          }
-        }
+          const action = this.sanitizeVillagerAction(rawAction);
+          const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
+          if (!villager) continue;
+          this.scheduleVillagerAction(villager, action, notableEvents);
         }
       }
 
@@ -4805,6 +4774,11 @@ Respond with JSON: {
       }
       if (!builder) return;
 
+      const llmBusy = this.usesLlmResourceDecisions(builder.villageId) &&
+        builder.isActionInProgress?.() &&
+        builder.currentAction?.action !== CONSTANTS.ACTIVITY.BUILDING;
+      if (llmBusy) return;
+
       builder.status = CONSTANTS.ACTIVITY.BUILDING;
       builder.activity = `Building ${project.name}`;
       builder.currentAction = { action: CONSTANTS.ACTIVITY.BUILDING, structure: project.type };
@@ -4870,7 +4844,8 @@ Respond with JSON: {
         (!villageId || v.villageId === villageId) &&
         v.status !== CONSTANTS.ACTIVITY.SLEEPING &&
         v.status !== CONSTANTS.ACTIVITY.EATING &&
-        v.status !== CONSTANTS.ACTIVITY.DRINKING
+        v.status !== CONSTANTS.ACTIVITY.DRINKING &&
+        !(this.usesLlmResourceDecisions(v.villageId) && v.isActionInProgress?.())
       )
       .sort((a, b) => (b.skills.crafting || 0) - (a.skills.crafting || 0));
 

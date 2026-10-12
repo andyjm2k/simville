@@ -32,6 +32,7 @@ class Villager {
     this.status = data.status || CONSTANTS.ACTIVITY.IDLE;
     this.activity = data.activity || 'Idle';
     this.activityDuration = data.activityDuration || 0;
+    this.actionQueue = Array.isArray(data.actionQueue) ? data.actionQueue.map(action => ({ ...action })) : [];
     this.socialPartnerId = data.socialPartnerId || null;
 
     // Relationships are directed: relationships[otherId] = how I feel about them (-100…100)
@@ -155,7 +156,7 @@ class Villager {
     // Update needs
     this.updateNeeds(deltaTime, villagers);
 
-    // Update status based on needs
+    // Update status based on needs. LLM-owned villagers skip local overrides.
     this.updateStatus(villagers);
 
     // Update movement
@@ -167,17 +168,11 @@ class Villager {
     // Update speech bubble
     this.updateSpeechBubble(deltaTime);
 
-    // Activity timers count milliseconds. Drinking, eating, and resting are not
-    // cleared when a short gather order expires — that was flipping status every frame.
+    // The current action runs until its timer ends, then the next queued LLM action starts.
     if (this.activityDuration > 0) {
       this.activityDuration -= deltaTime;
       if (this.activityDuration <= 0) {
-        this.activityDuration = 0;
-        if (!this.isNeedLockedActivity()) {
-          this.status = CONSTANTS.ACTIVITY.IDLE;
-          this.activity = 'Idle';
-          this.currentAction = null;
-        }
+        this.finishScheduledAction();
       }
     }
 
@@ -297,6 +292,9 @@ class Villager {
       return;
     }
 
+    // An LLM endpoint owns drinking, eating, and labor. Local rules must not replace that.
+    if (game?.usesLlmResourceDecisions?.(this.villageId)) return;
+
     if (this.status === CONSTANTS.ACTIVITY.DRINKING && this.thirst >= 85) {
       this.status = CONSTANTS.ACTIVITY.IDLE;
       this.activity = 'Idle';
@@ -374,6 +372,40 @@ class Villager {
       }
       return;
     }
+  }
+
+  /**
+   * True while a scheduled action still has time left.
+   * @returns {boolean}
+   */
+  isActionInProgress() {
+    return this.activityDuration > 0 && this.currentAction != null;
+  }
+
+  /**
+   * Hold an LLM action until the current one finishes. Keeps the newest few.
+   * @param {object} action
+   */
+  enqueueAction(action) {
+    if (!action) return;
+    if (!this.actionQueue) this.actionQueue = [];
+    this.actionQueue.push({ ...action });
+    while (this.actionQueue.length > 3) this.actionQueue.shift();
+  }
+
+  /**
+   * End the active action and start the next queued one, if the LLM sent one.
+   */
+  finishScheduledAction() {
+    this.activityDuration = 0;
+    const next = this.actionQueue?.shift();
+    if (next && game?.startScheduledAction) {
+      game.startScheduledAction(this, next);
+      return;
+    }
+    this.status = CONSTANTS.ACTIVITY.IDLE;
+    this.activity = 'Idle';
+    this.currentAction = null;
   }
 
   /**
@@ -525,7 +557,7 @@ class Villager {
           this.x = target.x;
           this.y = target.y;
           this.onReachedDestination();
-          if (!this.isNeedLockedActivity()) {
+          if (!this.isNeedLockedActivity() && !this.isActionInProgress()) {
             this.status = CONSTANTS.ACTIVITY.IDLE;
           }
           return;
@@ -821,7 +853,7 @@ class Villager {
       this.targetY = destination.y;
       this._repathAttempts = 0;
       if (options.placeEntry) this._pendingPlaceTarget = options.placeEntry;
-      if (!this.isNeedLockedActivity()) {
+      if (!this.isNeedLockedActivity() && !this.isActionInProgress()) {
         this.status = CONSTANTS.ACTIVITY.WORKING; // Moving for a purpose
       }
       return true;
@@ -1024,6 +1056,7 @@ class Villager {
       status: this.status,
       activity: this.activity,
       activityDuration: this.activityDuration,
+      actionQueue: this.actionQueue || [],
       socialPartnerId: this.socialPartnerId,
       ageProgress: this.ageProgress,
       needInterruptCooldown: this.needInterruptCooldown,

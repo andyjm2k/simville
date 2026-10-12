@@ -99,7 +99,35 @@ describe('LLM-owned resource decisions', () => {
     expect(villager.activity).not.toMatch(/Eating from the village stores/i);
   });
 
-  it('applyCriticalNeedReflex overrides non-survival actions only when collapsing', () => {
+  it('does not replace an LLM drinking decision with a local reflex', () => {
+    llm.config.llm.endpoint = 'http://127.0.0.1:1234/v1';
+    const villager = game.villagers[0];
+    villager.hunger = (CONSTANTS.NEED.CRITICAL_HUNGER ?? 25) - 5;
+    villager.thirst = 10;
+    villager.energy = 80;
+    villager.status = CONSTANTS.ACTIVITY.IDLE;
+    villager.activityDuration = 0;
+    villager.currentAction = null;
+    game.getResources(villager.villageId).water = 12;
+    game.getResources(villager.villageId).food = 10;
+
+    const blocked = game.applyCriticalNeedReflex(villager, {
+      action: CONSTANTS.ACTIVITY.GATHERING,
+      target: 'wood'
+    });
+    expect(blocked).toBe(false);
+    expect(villager.status).toBe(CONSTANTS.ACTIVITY.IDLE);
+
+    const applied = game.applyVillagerActions([{
+      villagerId: villager.id,
+      action: CONSTANTS.ACTIVITY.DRINKING,
+      duration: 4
+    }]);
+    expect(applied).toBe(1);
+    expect(villager.status).toBe(CONSTANTS.ACTIVITY.DRINKING);
+  });
+
+  it('applyCriticalNeedReflex overrides non-survival actions only when collapsing offline', () => {
     const villager = game.villagers[0];
     villager.hunger = (CONSTANTS.NEED.CRITICAL_HUNGER ?? 25) - 5;
     villager.thirst = 90;

@@ -131,7 +131,7 @@ describe('drinking is not interrupted by gathering', () => {
     return villager;
   }
 
-  it('keeps a critically thirsty villager drinking across repeated gather orders', () => {
+  it('offline rules still make a critically thirsty villager drink instead of gathering', () => {
     const villager = prepare(10, 15);
     const before = villager.thirst;
     const statuses = [];
@@ -228,6 +228,109 @@ describe('drinking is not interrupted by gathering', () => {
 
     expect(villager.status).toBe(CONSTANTS.ACTIVITY.DRINKING);
     llm.config.llm.endpoint = previous;
+  });
+
+  function enableLlm() {
+    llm.config = {
+      llm: {
+        endpoint: 'http://127.0.0.1:1234/v1',
+        model: 'local',
+        apiKey: '',
+        maxTokens: 100,
+        temperature: 0.2
+      }
+    };
+  }
+
+  it('keeps a critically thirsty villager on the LLM gather order', () => {
+    enableLlm();
+    const villager = prepare(10, 15, CONSTANTS.ACTIVITY.IDLE);
+    villager.activityDuration = 0;
+    villager.currentAction = null;
+    villager.actionQueue = [];
+
+    game.applyVillagerActions([{
+      villagerId: villager.id,
+      action: CONSTANTS.ACTIVITY.GATHERING,
+      target: 'wood',
+      duration: 5
+    }]);
+    villager.update(400, game.world, game.villagers);
+
+    expect(villager.status).toBe(CONSTANTS.ACTIVITY.GATHERING);
+    expect(villager.currentAction?.action).toBe(CONSTANTS.ACTIVITY.GATHERING);
+    expect(villager.actionQueue).toHaveLength(0);
+  });
+
+  it('queues the LLM drink until the current gather finishes, then thirst rises', () => {
+    enableLlm();
+    const villager = prepare(10, 20, CONSTANTS.ACTIVITY.IDLE);
+    villager.activityDuration = 0;
+    villager.currentAction = null;
+    villager.actionQueue = [];
+    game.timeState.hourDuration = 60000;
+    const before = villager.thirst;
+
+    game.applyVillagerActions([{
+      villagerId: villager.id,
+      action: CONSTANTS.ACTIVITY.GATHERING,
+      target: 'wood',
+      duration: 5
+    }]);
+    game.applyVillagerActions([{
+      villagerId: villager.id,
+      action: CONSTANTS.ACTIVITY.DRINKING,
+      duration: 5
+    }]);
+
+    expect(villager.status).toBe(CONSTANTS.ACTIVITY.GATHERING);
+    expect(villager.actionQueue.map(action => action.action)).toEqual([CONSTANTS.ACTIVITY.DRINKING]);
+
+    const statuses = [];
+    for (let step = 0; step < 6; step += 1) {
+      villager.update(1000, game.world, game.villagers);
+      statuses.push(villager.status);
+    }
+
+    expect(statuses.slice(0, 4).every(status => status === CONSTANTS.ACTIVITY.GATHERING)).toBe(true);
+    expect(statuses[statuses.length - 1]).toBe(CONSTANTS.ACTIVITY.DRINKING);
+    expect(villager.thirst).toBeGreaterThan(before);
+    expect(villager.isActionInProgress()).toBe(true);
+  });
+
+  it('drops the oldest queued action past the limit of three', () => {
+    enableLlm();
+    const villager = prepare(80, 10, CONSTANTS.ACTIVITY.IDLE);
+    villager.activityDuration = 0;
+    villager.currentAction = null;
+    villager.actionQueue = [];
+    game.applyVillagerActions([{ villagerId: villager.id, action: CONSTANTS.ACTIVITY.GATHERING, duration: 5 }]);
+    for (const action of ['drinking', 'eating', 'resting', 'fishing']) {
+      game.applyVillagerActions([{ villagerId: villager.id, action, duration: 2 }]);
+    }
+    expect(villager.actionQueue.map(action => action.action)).toEqual(['eating', 'resting', 'fishing']);
+    expect(villager.status).toBe(CONSTANTS.ACTIVITY.GATHERING);
+  });
+
+  it('does not let a personal goal replace an in-progress LLM action', () => {
+    enableLlm();
+    const villager = prepare(80, 10, CONSTANTS.ACTIVITY.GATHERING);
+    villager.activityDuration = 50000;
+    villager.currentAction = { action: CONSTANTS.ACTIVITY.GATHERING };
+    villager.goals = [{
+      id: 'goal-respect',
+      type: 'aspiration',
+      description: 'Become a respected member of the village',
+      completed: false,
+      failed: false,
+      progress: 10,
+      lastPursuedDay: 0
+    }];
+
+    game.processPersonalGoals();
+
+    expect(villager.status).toBe(CONSTANTS.ACTIVITY.GATHERING);
+    expect(villager.currentAction?.action).toBe(CONSTANTS.ACTIVITY.GATHERING);
   });
 
   it('stores action duration in milliseconds of game time', () => {
