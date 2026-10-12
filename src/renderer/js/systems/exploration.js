@@ -362,6 +362,7 @@ class ExplorationSystem {
     if (!this.isDaytime()) return;
     const villages = this.game.villages || [];
     for (const village of villages) {
+      if (this.game.agentOwnsVillagerActions?.(village.id)) continue;
       const rival = this.game.getRivalVillage?.(village.id) ||
         villages.find(v => v.id !== village.id);
       if (!rival || this.hasDiscovered(village, rival)) continue;
@@ -374,6 +375,7 @@ class ExplorationSystem {
    * If scouts never physically arrive, rumored contact still unlocks diplomacy.
    */
   maybeRumorContact() {
+    if (this.game.agentOwnsVillagerActions?.()) return;
     const day = this.game.timeState?.day || 1;
     const rumorDay = CONSTANTS.EXPLORATION?.RUMOR_CONTACT_DAYS || 5;
     if (day < rumorDay) return;

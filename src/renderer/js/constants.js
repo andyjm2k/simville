@@ -117,6 +117,10 @@ const CONSTANTS = {
     CRITICAL_HUNGER: 25,
     CRITICAL_THIRST: 25,
     CRITICAL_ENERGY: 15,
+    // Once a critical drink/eat/rest starts, hold it until the bar clears this
+    DRINK_SATISFIED: 85,
+    EAT_SATISFIED: 85,
+    REST_SATISFIED: 60,
     // Prompt guidance: treat needs below these as urgent for the LLM
     LLM_URGENT_HUNGER: 40,
     LLM_URGENT_THIRST: 40,

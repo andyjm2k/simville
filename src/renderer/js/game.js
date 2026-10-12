@@ -666,7 +666,9 @@ class Game {
       rivalDiscovered: this.explorationSystem?.hasDiscovered(village, otherVillage) || false
     };
 
-    if (!context.rivalDiscovered) {
+    // Offline villages still send a scout on their own. An owned village must
+    // choose "observe" so the scout is that agent's decision.
+    if (!context.rivalDiscovered && !this.agentOwnsVillagerActions(villageId)) {
       this.explorationSystem?.dispatchScout(village, otherVillage, 'chieftan_order');
       this.diplomaticEvents.push({
         type: 'observe',
@@ -2438,7 +2440,7 @@ class Game {
   isVillageStableForFamilyGrowth(requireHousingRoom = true) {
     if (this.villagers.length < 2) return false;
     if (requireHousingRoom && this.villagers.length + this.getExpectedBirthCount() >= this.getPopulationCapacity()) {
-      if (this.canAffordStructure(CONSTANTS.STRUCTURE.HUT)) {
+      if (!this.agentOwnsVillagerActions() && this.canAffordStructure(CONSTANTS.STRUCTURE.HUT)) {
         this.startConstructionProject('hut', { source: 'family_growth' });
       }
       return false;
@@ -2636,6 +2638,8 @@ class Game {
 
       const goal = villager.goals.find(g => !g.completed && !g.failed);
       if (!goal || !this.canPursuePersonalGoal(villager)) return;
+      // LLM-owned tribes choose labor themselves. Goals stay on the record.
+      if (this.agentOwnsVillagerActions(villager.villageId)) return;
 
       const alreadyPursuedToday = goal.lastPursuedDay === this.timeState.day;
       const shouldPursue = !alreadyPursuedToday || Math.random() < 0.08;
@@ -3148,53 +3152,117 @@ class Game {
 
   applyVillagerActions(actions) {
     let applied = 0;
-    const notableEvents = [];
 
     for (const rawAction of actions || []) {
       const action = this.sanitizeVillagerAction(rawAction);
       const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
       if (!villager) continue;
-
-      // Critical collapse only — mild needs stay under LLM/persona control
-      if (this.applyCriticalNeedReflex(villager, action)) continue;
-      if (villager.isScouting && !this.hasCriticalNeeds(villager)) continue;
-
-      const socialResult = this.applySocialVillagerAction(villager, action);
-      if (socialResult) {
-        applied += 1;
-        continue;
-      }
-
-      villager.applyAction(action);
-      applied += 1;
-
-      if (action.moveTo) {
-        villager.moveTo(action.moveTo.x, action.moveTo.y, this.world);
-      }
-
-      if (action.action === 'gathering') {
-        this.handleGathering(villager, action.resourceType || action.target);
-      }
-      if (action.action === 'hunting') {
-        this.handleHunting(villager);
-      }
-      if (action.action === 'fishing') {
-        this.handleFishing(villager);
-      }
-      if (action.action === 'drinking') {
-        villager.status = CONSTANTS.ACTIVITY.DRINKING;
-        villager.activity = 'Drinking from village water stores';
-      }
-      if (action.action === 'building') {
-        const requestedStructure = this.normalizeStructureType(action.structure || action.structureType || action.target) ||
-          this.chooseNeededStructure();
-        if (requestedStructure) {
-          this.startConstructionProject(requestedStructure, { source: 'villager', builderId: villager.id });
-        }
-      }
+      if (this.scheduleVillagerAction(villager, action)) applied += 1;
     }
 
     return applied;
+  }
+
+  /**
+   * Start an agent action now, or queue it until the current one finishes.
+   * Rule reflexes run only for villages no decision agent owns.
+   * @param {object} villager
+   * @param {object} action
+   * @param {object[]|null} [notableEvents]
+   * @returns {boolean} true when the action was started or queued
+   */
+  scheduleVillagerAction(villager, action, notableEvents = null) {
+    if (!villager || !action) return false;
+    if (villager.isScouting && !this.hasCriticalNeeds(villager)) return false;
+
+    const agentOwned = this.agentOwnsVillagerActions(villager.villageId);
+    if (!agentOwned && this.applyCriticalNeedReflex(villager, action)) return false;
+
+    if (agentOwned && villager.isActionInProgress?.()) {
+      villager.enqueueAction(action);
+      return true;
+    }
+
+    this.startScheduledAction(villager, action, notableEvents);
+    return true;
+  }
+
+  /**
+   * Apply one action and its movement or harvest side effects.
+   * @param {object} villager
+   * @param {object} action
+   * @param {object[]|null} [notableEvents]
+   */
+  startScheduledAction(villager, action, notableEvents = null) {
+    const socialResult = this.applySocialVillagerAction(villager, action);
+    if (socialResult) {
+      if (socialResult.notable && notableEvents) notableEvents.push(socialResult.notable);
+      return;
+    }
+
+    villager.applyAction(action);
+
+    if (action.moveTo) {
+      villager.moveTo(action.moveTo.x, action.moveTo.y, this.world);
+    }
+
+    if (action.action === 'gathering') {
+      const gathered = this.handleGathering(villager, action.resourceType || action.target);
+      if (gathered > 0) villager.showSpeechBubble('💪', 'Gathering resources');
+    }
+    if (action.action === 'hunting') {
+      const hunted = this.handleHunting(villager);
+      if (hunted > 0) {
+        villager.showSpeechBubble('🏹', 'Hunting');
+        if (notableEvents) {
+          notableEvents.push({
+            text: `${villager.name} returns from hunting with food!`,
+            type: 'normal'
+          });
+        }
+      }
+    }
+    if (action.action === 'fishing') {
+      const fished = this.handleFishing(villager);
+      if (fished > 0) {
+        villager.showSpeechBubble('🎣', 'Fishing');
+        if (notableEvents) {
+          notableEvents.push({
+            text: `${villager.name} caught fish at the river!`,
+            type: 'normal'
+          });
+        }
+      }
+    }
+    if (action.action === 'drinking') {
+      villager.status = CONSTANTS.ACTIVITY.DRINKING;
+      villager.activity = 'Drinking from village water stores';
+      villager.showSpeechBubble('💧', action.speechTheme || 'Drinking');
+    }
+    if (action.action === 'building') {
+      const requestedStructure = this.normalizeStructureType(action.structure || action.structureType || action.target) ||
+        this.chooseNeededStructure();
+      if (requestedStructure && this.startConstructionProject(requestedStructure, { source: 'villager', builderId: villager.id })) {
+        if (notableEvents) {
+          notableEvents.push({
+            text: `${villager.name} marked out ground for a new ${requestedStructure}.`,
+            type: 'normal'
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * True when villager labor must come from the decision agent.
+   * Rules must not gather, drink, build, or scout on the agent's behalf.
+   * Benchmarks always qualify so a heuristic opponent is not helped by hidden labor.
+   * @param {string} [villageId]
+   * @returns {boolean}
+   */
+  agentOwnsVillagerActions(villageId) {
+    if (this.benchmarkMode) return true;
+    return this.usesLlmResourceDecisions(villageId);
   }
 
   /**
@@ -3238,55 +3306,51 @@ class Game {
   }
 
   /**
-   * True when the proposed action already addresses survival.
-   * @param {object} action
-   * @returns {boolean}
-   */
-  isSurvivalAction(action) {
-    const a = action?.action;
-    return a === CONSTANTS.ACTIVITY.EATING ||
-      a === CONSTANTS.ACTIVITY.DRINKING ||
-      a === CONSTANTS.ACTIVITY.GATHERING ||
-      a === CONSTANTS.ACTIVITY.RESTING ||
-      a === CONSTANTS.ACTIVITY.SLEEPING ||
-      a === CONSTANTS.ACTIVITY.HUNTING ||
-      a === CONSTANTS.ACTIVITY.FISHING;
-  }
-
-  /**
-   * Last-resort local override when the LLM assigns a non-survival action
-   * to a collapsing villager. Returns true if the LLM action was discarded.
+   * Last-resort local override when an assignment would pull a collapsing villager
+   * off a drink, meal, or rest. Gathering does not count as drinking.
+   * Returns true if the incoming action was discarded.
    * @param {object} villager
    * @param {object} action
    * @param {{ showBubble?: boolean }} options
    * @returns {boolean}
    */
   applyCriticalNeedReflex(villager, action, options = {}) {
-    if (!this.hasCriticalNeeds(villager)) return false;
-    if (this.isSurvivalAction(action)) return false;
+    if (!villager || typeof NeedRecovery === 'undefined') return false;
+    // Drinking and other labor stay with the LLM. Queueing handles the next order.
+    if (this.agentOwnsVillagerActions(villager.villageId)) return false;
+
+    const resources = this.getResources(villager.villageId);
+    const recovery = NeedRecovery.resolve(villager, resources);
+    if (!recovery || NeedRecovery.allowsAction(action, recovery)) return false;
 
     const showBubble = options.showBubble === true;
-    const villageResources = this.getResources(villager.villageId);
+    if (recovery.mode === 'consume') {
+      const locked = NeedRecovery.consumeStatus(recovery);
+      if (locked) {
+        villager.beginNeedActivity(locked.status, locked.activity);
+        if (showBubble) {
+          const bubbles = {
+            thirst: ['💧', 'Needs water!'],
+            hunger: ['🍖', 'Needs food!'],
+            energy: ['😫', 'Needs rest!']
+          };
+          const bubble = bubbles[recovery.kind];
+          if (bubble) villager.showSpeechBubble(bubble[0], bubble[1]);
+        }
+      }
+      return true;
+    }
 
-    if ((villager.thirst ?? 100) < (CONSTANTS.NEED.CRITICAL_THIRST ?? 25) && villageResources.water > 0) {
-      villager.status = CONSTANTS.ACTIVITY.DRINKING;
-      villager.activity = 'Desperate for water';
+    if (recovery.kind === 'thirst') {
+      this.assignWaterWork(villager);
       if (showBubble) villager.showSpeechBubble('💧', 'Needs water!');
       return true;
     }
-    if (villager.hunger < (CONSTANTS.NEED.CRITICAL_HUNGER ?? 25) && villageResources.food > 0) {
-      villager.status = CONSTANTS.ACTIVITY.EATING;
-      villager.activity = 'Desperate for food';
+    if (recovery.kind === 'hunger') {
+      this.assignFoodWork(villager);
       if (showBubble) villager.showSpeechBubble('🍖', 'Needs food!');
       return true;
     }
-    if (villager.energy < (CONSTANTS.NEED.CRITICAL_ENERGY ?? 15)) {
-      villager.status = CONSTANTS.ACTIVITY.RESTING;
-      villager.activity = 'Collapsing from exhaustion';
-      if (showBubble) villager.showSpeechBubble('😫', 'Needs rest!');
-      return true;
-    }
-    // Critically needy with empty stores — skip non-survival LLM pick
     return true;
   }
 
@@ -3496,97 +3560,10 @@ class Game {
         }
 
         for (const rawAction of actions) {
-        const action = this.sanitizeVillagerAction(rawAction);
-        const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
-        if (villager) {
-          // Critical collapse only — mild needs stay under LLM/persona control
-          if (this.applyCriticalNeedReflex(villager, action, { showBubble: true })) continue;
-          if (villager.isScouting && !this.hasCriticalNeeds(villager)) continue;
-
-          const socialResult = this.applySocialVillagerAction(villager, action);
-          if (socialResult) {
-            if (socialResult.notable) notableEvents.push(socialResult.notable);
-            continue;
-          }
-
-          villager.applyAction(action);
-
-          // Handle movement
-          if (action.moveTo) {
-            villager.moveTo(action.moveTo.x, action.moveTo.y, this.world);
-          }
-
-          // Handle gathering -villagers find and harvest resources
-          if (action.action === 'gathering') {
-            const gathered = this.handleGathering(villager, action.resourceType || action.target);
-            if (gathered > 0) {
-              villager.showSpeechBubble('💪', 'Gathering resources');
-            }
-          }
-
-          // Handle hunting - villagers hunt for food
-          if (action.action === 'hunting') {
-            const hunted = this.handleHunting(villager);
-            if (hunted > 0) {
-              notableEvents.push({
-                text: `${villager.name} returns from hunting with food!`,
-                type: 'normal'
-              });
-              villager.showSpeechBubble('🏹', 'Hunting');
-            }
-          }
-
-          // Handle fishing
-          if (action.action === 'fishing') {
-            const fished = this.handleFishing(villager);
-            if (fished > 0) {
-              notableEvents.push({
-                text: `${villager.name} caught fish at the river!`,
-                type: 'normal'
-              });
-              villager.showSpeechBubble('🎣', 'Fishing');
-            }
-          }
-
-          if (action.action === 'drinking') {
-            villager.status = CONSTANTS.ACTIVITY.DRINKING;
-            villager.activity = 'Drinking from village water stores';
-            villager.showSpeechBubble('💧', action.speechTheme || 'Drinking');
-          }
-
-          if (action.action === 'building') {
-            const requestedStructure = this.normalizeStructureType(action.structure || action.structureType || action.target) ||
-              this.chooseNeededStructure();
-            if (requestedStructure && this.startConstructionProject(requestedStructure, { source: 'villager', builderId: villager.id })) {
-              notableEvents.push({
-                text: `${villager.name} marked out ground for a new ${requestedStructure}.`,
-                type: 'normal'
-              });
-            }
-          }
-
-          // Record work activities occasionally
-          if (action.action === 'building' && Math.random() < 0.3) {
-            notableEvents.push({
-              text: `${villager.name} is constructing something new for the village.`,
-              type: 'normal'
-            });
-          }
-
-          if (action.action === 'hunting' && Math.random() < 0.3) {
-            notableEvents.push({
-              text: `${villager.name} stalks prey in the jungle.`,
-              type: 'normal'
-            });
-          }
-
-          if (action.action === 'fishing' && Math.random() < 0.3) {
-            notableEvents.push({
-              text: `${villager.name} casts their net into the river.`,
-              type: 'normal'
-            });
-          }
-        }
+          const action = this.sanitizeVillagerAction(rawAction);
+          const villager = this.villagers.find(v => v.id === action.villagerId || v.name === action.villagerName);
+          if (!villager) continue;
+          this.scheduleVillagerAction(villager, action, notableEvents);
         }
       }
 
@@ -3650,7 +3627,7 @@ class Game {
 
     // When an LLM endpoint is configured, villagers decide resource work themselves.
     // Skip rules-engine labor assignment and emergency stockpile grants.
-    if (this.usesLlmResourceDecisions(village.id)) return;
+    if (this.agentOwnsVillagerActions(village.id)) return;
 
     const foodRuleMultiplier = this.hasActiveRuleEffect('food_reserve', village.id) || this.hasActiveRuleEffect('farm_first', village.id) ? 1.45 : 1;
     const waterRuleMultiplier = this.hasActiveRuleEffect('water_priority', village.id) ? 1.45 : 1;
@@ -3679,6 +3656,7 @@ class Game {
         v.energy > 25 &&
         v.lifeStage?.canWork !== false &&
         v.status !== CONSTANTS.ACTIVITY.EATING &&
+        v.status !== CONSTANTS.ACTIVITY.DRINKING &&
         v.status !== CONSTANTS.ACTIVITY.SLEEPING &&
         v.status !== CONSTANTS.ACTIVITY.RESTING &&
         v.status !== CONSTANTS.ACTIVITY.SOCIALIZING &&
@@ -4726,8 +4704,10 @@ Respond with JSON: {
     // Hard benchmarks: do not let the rules engine grow the village for the agent
     if (this.benchmarkMode && !this.allowAutonomousBuild) return;
 
-    // Plan at most one project per tick, but evaluate each tribe's own stockpile
+    // Plan at most one project per tick, but evaluate each tribe's own stockpile.
+    // Agent-owned tribes build only when their decision agent orders it.
     for (const village of this.villages) {
+      if (this.agentOwnsVillagerActions(village.id)) continue;
       const villageProjects = this.constructionProjects.filter(p => p.villageId === village.id);
       if (villageProjects.length > 0) continue;
 
@@ -4865,11 +4845,16 @@ Respond with JSON: {
     const completed = [];
     this.constructionProjects.forEach(project => {
       let builder = this.villagers.find(v => v.id === project.builderId && v.health > 0);
+      const agentOwns = this.agentOwnsVillagerActions(project.villageId);
       if (!builder || builder.lifeStage?.canWork === false) {
+        if (agentOwns) return;
         builder = this.selectBuilder(null, project.villageId);
         project.builderId = builder?.id || null;
       }
       if (!builder) return;
+
+      // Do not pull an agent-owned villager onto the site unless they were told to build.
+      if (agentOwns && builder.currentAction?.action !== CONSTANTS.ACTIVITY.BUILDING) return;
 
       builder.status = CONSTANTS.ACTIVITY.BUILDING;
       builder.activity = `Building ${project.name}`;
@@ -4936,7 +4921,8 @@ Respond with JSON: {
         (!villageId || v.villageId === villageId) &&
         v.status !== CONSTANTS.ACTIVITY.SLEEPING &&
         v.status !== CONSTANTS.ACTIVITY.EATING &&
-        v.status !== CONSTANTS.ACTIVITY.DRINKING
+        v.status !== CONSTANTS.ACTIVITY.DRINKING &&
+        !(this.agentOwnsVillagerActions(v.villageId) && v.isActionInProgress?.())
       )
       .sort((a, b) => (b.skills.crafting || 0) - (a.skills.crafting || 0));
 
