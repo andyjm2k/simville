@@ -50,6 +50,8 @@ class Village {
 
     // Conquest baseline population
     this.originalPopulation = data.originalPopulation ?? null;
+    // Highest living headcount seen, so the end screen can show a drop below the start
+    this.peakPopulation = Number.isFinite(data.peakPopulation) ? data.peakPopulation : null;
 
     // Other tribes this village has actually encountered (ids)
     this.knownVillages = data.knownVillages || [];
@@ -241,6 +243,7 @@ class Village {
       techState: JSON.parse(JSON.stringify(this.techState)),
       displayIndex: this.displayIndex,
       originalPopulation: this.originalPopulation,
+      peakPopulation: this.peakPopulation,
       knownVillages: [...(this.knownVillages || [])],
       lastScoutDay: this.lastScoutDay || 0,
       scoutAttempts: this.scoutAttempts || 0,

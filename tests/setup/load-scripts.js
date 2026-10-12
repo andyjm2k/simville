@@ -34,7 +34,8 @@ const SYSTEM_SCRIPT_ORDER = [
   'systems/baseline-agent.js',
   'systems/scenarios.js',
   'systems/benchmark.js',
-  'systems/village-agents.js'
+  'systems/village-agents.js',
+  'systems/simulation-report.js'
 ];
 
 const SCRIPT_EXPORTS = {
@@ -65,6 +66,7 @@ const SCRIPT_EXPORTS = {
   'systems/scenarios.js': ['BenchmarkScenarios'],
   'systems/benchmark.js': ['BenchmarkScorer', 'BenchmarkRunner'],
   'systems/village-agents.js': ['VillageAgents'],
+  'systems/simulation-report.js': ['SimulationReport'],
   'game.js': ['Game', 'game']
 };
 
@@ -95,6 +97,7 @@ const GLOBAL_EXPORTS = [
   'BenchmarkScorer',
   'BenchmarkRunner',
   'VillageAgents',
+  'SimulationReport',
   'Game',
   'WorldRenderer',
   'VillagerRenderer',
