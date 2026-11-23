@@ -688,6 +688,9 @@ const CONSTANTS = {
   VILLAGE: {
     DEFAULT_RADIUS: 12,
     MIN_DISTANCE_BETWEEN: 30,
+    // Total villagers spawned per village: 1 chieftan + (STARTING_VILLAGERS - 1)
+    // tribespeople (see createInitialVillagers). Settled value — SPEC §4.1,
+    // the config initialPopulation default and the HUD placeholder all say 5.
     STARTING_VILLAGERS: 5,
     NAME_PREFIXES: ['Elder', 'Storm', 'River', 'Stone', 'Iron', 'Golden', 'Shadow', 'Wind', 'Thunder', 'Dawn', 'Mist', 'Ember'],
     NAME_SUFFIXES: ['vale', 'hollow', 'fall', 'peak', 'ridge', 'glen', 'mere', 'fell', 'brook', 'watch', 'haven', 'crest']

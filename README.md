@@ -30,5 +30,8 @@ Graphics toggles live under **Settings** (`lighting`, `particles`, labels, speec
 ```bash
 npm install
 npm start          # Electron app
-npm run test:unit  # Vitest unit + QA suites
+npm run test:unit  # Vitest unit tests only (tests/unit)
+npm run test:qa    # Vitest QA tests only (tests/qa)
+npm test           # Vitest unit + QA, then the standalone systems suites
+npm run benchmark -- --days 10 --seed 42 --agent-b-type baseline  # headless benchmark run
 ```

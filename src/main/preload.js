@@ -40,9 +40,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadGame: (filename) => ipcRenderer.invoke('game:load', filename),
   listSaves: () => ipcRenderer.invoke('game:list-saves'),
 
-  // Dialogs
-  showSaveDialog: () => ipcRenderer.invoke('dialog:show-save'),
-
   // Menu events (each returns unsubscribe; prefer single register per channel)
   onMenuNewWorld: (callback) => onMenu('menu:new-world', callback),
   onMenuSave: (callback) => onMenu('menu:save', callback),

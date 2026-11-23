@@ -30,7 +30,7 @@ const store = new Store({
     },
     simulation: {
       dayLengthMinutes: 10,
-      initialPopulation: 6,
+      initialPopulation: 5,
       worldSize: 64,
       endCondition: 'unlimited'
     },
@@ -369,15 +369,6 @@ ipcMain.handle('game:list-saves', async () => {
     log.error('List saves failed:', error);
     return [];
   }
-});
-
-// Show save dialog
-ipcMain.handle('dialog:show-save', async () => {
-  const result = await dialog.showSaveDialog(mainWindow, {
-    filters: [{ name: 'Simville Saves', extensions: ['json'] }],
-    defaultPath: path.join(app.getPath('userData'), 'saves', 'save.json')
-  });
-  return result;
 });
 
 // App lifecycle

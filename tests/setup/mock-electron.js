@@ -45,7 +45,6 @@ export function createElectronMock(overrides = {}) {
     saveGame: async (saveData) => ({ success: true, filename: `save_${Date.now()}.json`, data: saveData }),
     loadGame: async () => ({ success: false, error: 'No save loaded in mock' }),
     listSaves: async () => [],
-    showSaveDialog: async () => ({ canceled: true, filePaths: [] }),
     onMenuEvent: noop,
     removeMenuListener: noop,
     ...overrides

@@ -1290,49 +1290,55 @@ class Game {
     this.ui.updateTribeSelector(this.villages, this.hudVillageId);
   }
 
+  // Backstories/goals/secrets are generated per villager, in batches of
+  // 4 in flight at a time (was: up to 30 fully serial LLM calls before
+  // the village felt alive). Local LLM servers serialise requests in
+  // LLMManager's queue anyway; the cap mainly helps remote endpoints.
+  // Fire-and-forget from newWorld(): backstories trickle in as they land.
   async generateInitialBackstories() {
-    console.log('generateInitialBackstories: Starting with', this.villagers.length, 'villagers');
-    for (const villager of this.villagers) {
-      try {
-        console.log('generateInitialBackstories: Processing', villager.name);
-        if (!villager.backstory) {
-          villager.backstory = llm.generateFallbackBackstory(villager);
-          this.refreshSelectedVillagerNarrative(villager);
-        }
+    const BATCH_SIZE = 4;
+    for (let i = 0; i < this.villagers.length; i += BATCH_SIZE) {
+      await Promise.all(
+        this.villagers.slice(i, i + BATCH_SIZE).map((v) => this.generateVillagerBackstory(v))
+      );
+    }
+  }
 
-        const generatedBackstory = await llm.generateBackstory(villager);
-        if (generatedBackstory) {
-          villager.backstory = generatedBackstory;
-          this.refreshSelectedVillagerNarrative(villager);
-        }
-        console.log('  Got backstory for', villager.name, '- length:', villager.backstory?.length);
-        villager.goals = this.normalizeGoals(await llm.generateGoals(villager), villager);
-        this.refreshSelectedVillagerNarrative(villager);
-        console.log('  Got goals for', villager.name);
-
-        // Generate a secret for some villagers (LLM or deterministic fallback)
-        if (Math.random() < 0.4) {
-          const otherVillagers = this.villagers.filter(v => v.id !== villager.id);
-          const secret = await llm.generateSecret(villager, otherVillagers);
-          if (secret) {
-            villager.secrets.push(secret);
-            this.refreshSelectedVillagerNarrative(villager);
-          }
-        }
-        console.log('  After processing, villagers.length:', this.villagers.length);
-      } catch (error) {
-        console.error('Failed to generate backstory for', villager.name, error);
-        // Use fallback values to prevent game state corruption
-        villager.backstory = villager.backstory || llm.generateFallbackBackstory(villager);
-        villager.goals = this.normalizeGoals(villager.goals?.length ? villager.goals : this.getFallbackGoals(villager), villager);
-        if ((!villager.secrets || villager.secrets.length === 0) && Math.random() < 0.4) {
-          const otherVillagers = this.villagers.filter(v => v.id !== villager.id);
-          villager.secrets = [llm.generateFallbackSecret(villager, otherVillagers)];
-        }
+  async generateVillagerBackstory(villager) {
+    try {
+      if (!villager.backstory) {
+        villager.backstory = llm.generateFallbackBackstory(villager);
         this.refreshSelectedVillagerNarrative(villager);
       }
+
+      const generatedBackstory = await llm.generateBackstory(villager);
+      if (generatedBackstory) {
+        villager.backstory = generatedBackstory;
+        this.refreshSelectedVillagerNarrative(villager);
+      }
+      villager.goals = this.normalizeGoals(await llm.generateGoals(villager), villager);
+      this.refreshSelectedVillagerNarrative(villager);
+
+      // Generate a secret for some villagers (LLM or deterministic fallback)
+      if (Math.random() < 0.4) {
+        const otherVillagers = this.villagers.filter(v => v.id !== villager.id);
+        const secret = await llm.generateSecret(villager, otherVillagers);
+        if (secret) {
+          villager.secrets.push(secret);
+          this.refreshSelectedVillagerNarrative(villager);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to generate backstory for', villager.name, error);
+      // Use fallback values to prevent game state corruption
+      villager.backstory = villager.backstory || llm.generateFallbackBackstory(villager);
+      villager.goals = this.normalizeGoals(villager.goals?.length ? villager.goals : this.getFallbackGoals(villager), villager);
+      if ((!villager.secrets || villager.secrets.length === 0) && Math.random() < 0.4) {
+        const otherVillagers = this.villagers.filter(v => v.id !== villager.id);
+        villager.secrets = [llm.generateFallbackSecret(villager, otherVillagers)];
+      }
+      this.refreshSelectedVillagerNarrative(villager);
     }
-    console.log('generateInitialBackstories: Done, final villagers.length:', this.villagers.length);
   }
 
   refreshSelectedVillagerNarrative(villager) {
@@ -5519,6 +5525,10 @@ Respond with JSON: {
       nextChieftanDecision: this.nextChieftanDecision,
       hostileDaysCount: this.hostileDaysCount,
       hudVillageId: this.hudVillageId,
+      // Counters that drive behaviour (autosave day, chronicle cadence);
+      // loadGame() restores them, older saves omit them (defaults to 0).
+      tickCount: this.tickCount,
+      lastAutoSaveDay: this.lastAutoSaveDay,
       savedAt: Date.now()
     };
 

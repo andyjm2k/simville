@@ -1,5 +1,7 @@
 # Simville Test Coverage Gaps
 
+> **Status (November 2026, verified at HEAD `bf20486` + fix-first-batch):** the P0 gaps below are **all fixed** — see the `Status` column. Do not re-file them. The P1 main-process gaps are partially closed: the LLM endpoint validator is now a pure module with unit tests (`tests/unit/llm-endpoint.test.js`), and seeded-replicate determinism has a test (`tests/unit/benchmark-determinism.test.js`).
+
 End-to-end review of the Simville codebase against the new Vitest + headless QA harness (`tests/`). This document maps what is covered today versus what remains untested.
 
 ## Current Test Infrastructure
@@ -44,34 +46,34 @@ node tests/qa/harness.mjs --suite save-roundtrip
 
 ### Not covered (gaps)
 
-#### P0 — Critical simulation correctness
+#### P0 — Critical simulation correctness (all fixed at HEAD, Nov 2026)
 
-| Gap | File(s) | Risk | Suggested test |
-|-----|---------|------|----------------|
-| Dual resource pools (`Game.resources` vs `Village.resources`) | `game.js`, `villager.js` | HUD/sim mismatch | QA: gather → assert village pool credited |
-| Failed raid stuck in `attacking` | `game.js` `processRaid` | Infinite combat loop | **Characterized** in `raid-state-machine.test.js`; flip to failing test when fixed |
-| Conquest baseline timing | `game.js` `evaluateConquest` | Conquest never fires | QA: raid casualties → assert conquest threshold |
-| Villager assignment indices 6+ | `game.js` `assignVillagersToVillages` | **Characterized** in `village-assignment.test.js` | Rewrite test when assignment fixed |
-| `llmTick` early `return` | `game.js` | Aborts remaining villager actions | QA: mock LLM actions with one out-of-range interaction |
+| Gap | File(s) | Risk | Suggested test | Status |
+|-----|---------|------|----------------|--------|
+| Dual resource pools (`Game.resources` vs `Village.resources`) | `game.js`, `villager.js` | HUD/sim mismatch | QA: gather → assert village pool credited | **Fixed** — `Economy` is the single source of truth; no `Game.resources` remains |
+| Failed raid stuck in `attacking` | `game.js` `processRaid` | Infinite combat loop | **Characterized** in `raid-state-machine.test.js`; flip to failing test when fixed | **Fixed** — phase machine with `combatResolved` guard; test asserts the raid exits attacking into retreating and clears |
+| Conquest baseline timing | `game.js` `evaluateConquest` | Conquest never fires | QA: raid casualties → assert conquest threshold | **Fixed** — baseline snapshotted at village creation / raid start |
+| Villager assignment indices 6+ | `game.js` `assignVillagersToVillages` | **Characterized** in `village-assignment.test.js` | Rewrite test when assignment fixed | **Fixed** — nearest-centre assignment; test asserts 10 villagers, all assigned, one chieftan each |
+| `llmTick` early `return` | `game.js` | Aborts remaining villager actions | QA: mock LLM actions with one out-of-range interaction | **Fixed** — tick loop uses `continue`; out-of-range social actions now return `{ handled: false, reason: 'out_of_range' }` (fix-first-batch) |
 
 #### P1 — Electron main process (0% coverage)
 
-| Gap | File | Risk |
-|-----|------|------|
-| Path traversal on `game:load` | `main.js` | Arbitrary file read |
-| SSRF via LLM endpoint | `main.js` | Internal network access |
-| Save/load IPC contracts | `main.js` | Data loss |
-| Config persistence | `main.js` + `electron-store` | Settings drift |
+| Gap | File | Risk | Status (Nov 2026) |
+|-----|------|------|-------------------|
+| Path traversal on `game:load` | `main.js` | Arbitrary file read | **Fixed** — `basename` + `startsWith(savesDir)` |
+| SSRF via LLM endpoint | `main.js` | Internal network access | **Partially fixed (fix-first-batch)** — validator extracted to `src/main/llm-endpoint.js` with unit tests; UI test routes through main-process IPC with timeout + `redirect: 'error'`. Remaining: no DNS-resolution check |
+| Save/load IPC contracts | `main.js` | Data loss | Not covered |
+| Config persistence | `main.js` + `electron-store` | Settings drift | Not covered |
 
-**Recommendation:** Extract path sanitization and LLM URL validation into testable pure functions under `src/main/lib/`, then add `tests/unit/main/` with mocked `electron`.
+**Recommendation:** Extract path sanitization and LLM URL validation into testable pure functions under `src/main/lib/`, then add `tests/unit/main/` with mocked `electron`. — *Update (Nov 2026): the LLM URL validation half of this is done (`src/main/llm-endpoint.js` + `tests/unit/llm-endpoint.test.js`); path sanitization is still inline in `main.js`.*
 
 #### P2 — Renderer modules with no direct tests
 
 | Module | Lines | Gap |
 |--------|-------|-----|
-| `ui.js` | ~907 | DOM rendering, XSS via `innerHTML`, panel state |
-| `game.js` (full) | ~4115 | ~95% of methods untested (build, diplomacy, family, tech, LLM tick) |
-| `villager.js` (movement/render) | ~790 | Path movement, rendering, gathering loops |
+| `ui.js` | ~1,376 | DOM rendering, XSS via `innerHTML`, panel state |
+| `game.js` (full) | ~5,644 | ~95% of methods untested (build, diplomacy, family, tech, LLM tick) |
+| `villager.js` (movement/render) | ~1,299 | Path movement, rendering, gathering loops |
 | `world.js` (renderer) | ~400 | Canvas draw paths (needs canvas pixel assertions or snapshot mocks) |
 
 #### P3 — External / non-deterministic
@@ -84,12 +86,14 @@ node tests/qa/harness.mjs --suite save-roundtrip
 
 ## Known Issues Documented by Tests
 
+> **Status (Nov 2026):** all four items below were fixed at HEAD. The tests that used to encode the buggy behaviour have been updated to assert correct behaviour — do not flip them back.
+
 These QA tests **pass** while encoding current (buggy) behavior so refactors can detect fixes:
 
-1. **Village assignment** — High-index villagers may remain unassigned (`village-assignment.test.js`).
-2. **Failed raids** — `activeRaid` can remain in `attacking` phase (`raid-state-machine.test.js`).
-3. **LLM fallback schema** — Generic `{ type: 'idle' }` vs `{ villagerId, action }` (`llm-fallback.test.js`, `llm.test.js`).
-4. **Seeded RNG unused** — `randomInt`/`shuffle` ignore `setSeed` (`utils.test.js`).
+1. **Village assignment** — High-index villagers may remain unassigned (`village-assignment.test.js`). → **Fixed:** nearest-centre assignment; test asserts all assigned.
+2. **Failed raids** — `activeRaid` can remain in `attacking` phase (`raid-state-machine.test.js`). → **Fixed:** phase machine clears on failure; test asserts the transition.
+3. **LLM fallback schema** — Generic `{ type: 'idle' }` vs `{ villagerId, action }` (`llm-fallback.test.js`, `llm.test.js`). → **Fixed:** typed per-villager fallbacks exist.
+4. **Seeded RNG unused** — `randomInt`/`shuffle` ignore `setSeed` (`utils.test.js`). → **Fixed:** `Utils.random*` use the seeded LCG, and headless mode seeds `Math.random` too (fix-first-batch, `tests/unit/benchmark-determinism.test.js`).
 
 When fixing these bugs, update the corresponding tests to assert correct behavior.
 

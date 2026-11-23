@@ -7,10 +7,14 @@
  * picks, wandering), so two runs with --seed 42 diverged.
  */
 import { describe, it, expect } from 'vitest';
-import { createHeadlessGame } from '../setup/load-scripts.js';
+import { loadRendererScripts } from '../setup/load-scripts.js';
 
 async function runSeededSnapshot(seed) {
-  const game = createHeadlessGame(seed);
+  // Deliberately the raw benchmark path (new Game() + initializeHeadless),
+  // not createHeadlessGame() — the test harness already seeded Math.random,
+  // so only this path catches a regression in initializeHeadless itself.
+  loadRendererScripts({ includeGame: true, includeSystems: true });
+  const game = new Game();
   await game.initializeHeadless({
     seed,
     dayLengthMs: 10000,
