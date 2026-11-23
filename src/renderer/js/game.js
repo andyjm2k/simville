@@ -2990,6 +2990,10 @@ class Game {
 
     const seed = options.seed ?? 4242;
     Utils.setSeed(seed);
+    // Seed Math.random too: sim code calls it directly in ~46 places (raid
+    // combat, secrets, chronicle picks, wandering), so seeding Utils alone
+    // does not make same-seed replicates reproducible.
+    Utils.seedMathRandom(seed);
 
     const dayLengthMs = options.dayLengthMs || 60000;
     this.timeState.hourDuration = dayLengthMs / 24;

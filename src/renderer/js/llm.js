@@ -125,6 +125,19 @@ class LLMManager {
       return { success: false, error: 'Endpoint not configured. Please enter your LLM endpoint URL.' };
     }
 
+    // In Electron, test through the main process: it validates the endpoint
+    // (SSRF guard, see src/main/llm-endpoint.js), enforces a timeout and
+    // refuses redirects. The renderer must never fetch a user-supplied
+    // endpoint directly. Outside Electron (tests / plain browser) there is
+    // no main process, so fall through to the direct fetch below.
+    if (typeof window !== 'undefined' && window.electronAPI?.testLLMConnection) {
+      try {
+        return await window.electronAPI.testLLMConnection(testConfig);
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
+    }
+
     try {
       // Handle endpoints that may already include /v1
       const baseUrl = testConfig.endpoint.replace(/\/$/, '');
