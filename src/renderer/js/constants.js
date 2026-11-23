@@ -88,6 +88,11 @@ const CONSTANTS = {
 
   // Time
   TIME: {
+    // Default ms per game hour (Game constructor default). Used as the
+    // fallback wherever game.timeState.hourDuration is unavailable, so
+    // needs decay matches the live game instead of running ~16x too fast
+    // (the old fallback was 600 ms).
+    DEFAULT_HOUR_MS: 10000,
     DAWN_START: 6,
     MORNING_START: 8,
     AFTERNOON_START: 12,

@@ -304,10 +304,15 @@ class Game {
     villager.applyAction(socialAction);
     this.beginSocializing(villager, partner);
 
-    if (!partner) return { handled: true };
+    // The villager starts walking to the partner (beginSocializing above),
+    // but no relationship effect is applied until they are in range — so
+    // report honestly instead of claiming the interaction succeeded.
+    if (!partner) return { handled: false, reason: 'no_partner' };
 
     const dist = Utils.distance(villager.x, villager.y, partner.x, partner.y);
-    if (dist > this.getSocialRange()) return { handled: true };
+    if (dist > this.getSocialRange()) {
+      return { handled: false, reason: 'out_of_range', distance: dist, range: this.getSocialRange() };
+    }
 
     let notable = null;
     if (this.socialSystem) {
@@ -1232,6 +1237,20 @@ class Game {
     this.constructionAccumulator = 0;
     this.goalAccumulator = 0;
 
+    // Full reset: counters/accumulators and queues from the previous world
+    // must not carry over, or the first autosave fires on a stale day,
+    // chronicle greetings run on a stale tick cadence, and a stale
+    // simulation report survives into the new world.
+    this.tickCount = 0;
+    this.tickAccumulator = 0;
+    this.survivalAccumulator = 0;
+    this.techDecisionAccumulator = 0;
+    this.lastAutoSaveDay = 0;
+    this.eventQueue = [];
+    this.benchmarkEvents = [];
+    this.simulationReport = null;
+    this.isGeneratingActions = false;
+
     // Per-village chronicles start fresh
     this.villages.forEach(village => {
       village.chronicle = village.createDefaultChronicle();
@@ -1739,10 +1758,11 @@ class Game {
     this.ui.updateHUD(this.timeState, this.getHudResources(), this.paused, this.villages, this.getSelectedVillage());
     this.checkExtinction();
 
-    // Auto-save once near the start of each in-game day.
-    if (this.timeState.day !== this.lastAutoSaveDay &&
-        Math.floor(this.timeState.hours) === 0 &&
-        this.timeState.hours < 0.1) {
+    // Auto-save once per in-game day. Trigger on the day change itself:
+    // the old `hours < 0.1` window was only ~0.1 game-hours wide, so a
+    // large frame delta (tab switch, slow frame, high sim speed) could
+    // jump past it and skip that day's autosave entirely.
+    if (this.timeState.day !== this.lastAutoSaveDay) {
       this.lastAutoSaveDay = this.timeState.day;
       this.autoSave();
     }
@@ -3200,6 +3220,11 @@ class Game {
   startScheduledAction(villager, action, notableEvents = null) {
     const socialResult = this.applySocialVillagerAction(villager, action);
     if (socialResult) {
+      // A social result — even { handled: false, reason: 'out_of_range' } —
+      // means the social action was started (the villager is walking to the
+      // partner); it must not fall through to villager.applyAction, which
+      // applySocialVillagerAction already ran. No relationship effect was
+      // applied out of range, and the result says so.
       if (socialResult.notable && notableEvents) notableEvents.push(socialResult.notable);
       return;
     }
@@ -5570,6 +5595,20 @@ Respond with JSON: {
 
       // Restore time
       this.timeState = saveData.timeState;
+
+      // Restore the counters that drive behaviour (autosave day, chronicle
+      // cadence); older saves omit them, so default to 0. Accumulators and
+      // queues never carry over from the previous session.
+      this.tickCount = saveData.tickCount ?? 0;
+      this.lastAutoSaveDay = saveData.lastAutoSaveDay ?? 0;
+      this.tickAccumulator = 0;
+      this.survivalAccumulator = 0;
+      this.techDecisionAccumulator = 0;
+      this.goalAccumulator = 0;
+      this.eventQueue = [];
+      this.benchmarkEvents = [];
+      this.simulationReport = null;
+      this.isGeneratingActions = false;
 
       // Restore per-village chronicle/tech (migrate legacy global saves)
       this.villages.forEach((village, index) => {

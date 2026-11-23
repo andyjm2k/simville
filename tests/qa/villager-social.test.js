@@ -128,7 +128,7 @@ describe('QA: socializing restores social need and does not loop', () => {
     expect(a.targetY).toBe(firstTarget.y);
   });
 
-  it('walks toward a distant partner instead of cancelling the social action', () => {
+  it('walks toward a distant partner but honestly reports the interaction as not yet applied', () => {
     const { a, b } = tribeMates();
     const village = game.getVillage(a.villageId);
     const left = game.world.getWalkableTileNear(village.center.x - 5, village.center.y, 2);
@@ -141,6 +141,7 @@ describe('QA: socializing restores social need and does not loop', () => {
     b.y = right.y;
     a.stopMoving();
 
+    const before = a.getRelationship(b);
     const result = game.applySocialVillagerAction(a, {
       action: CONSTANTS.ACTIVITY.SOCIALIZING,
       interactionTarget: b.id,
@@ -148,7 +149,11 @@ describe('QA: socializing restores social need and does not loop', () => {
       speechTheme: 'Hello'
     });
 
-    expect(result?.handled).toBe(true);
+    // Out of range: the villager walks over, but the interaction must not
+    // report success and must not apply any relationship effect yet.
+    expect(result?.handled).toBe(false);
+    expect(result?.reason).toBe('out_of_range');
+    expect(a.getRelationship(b)).toBe(before);
     expect(a.speechBubble?.theme).not.toBe('Too far to talk');
     expect(a.status).toBe(CONSTANTS.ACTIVITY.SOCIALIZING);
     expect(a.socialPartnerId).toBe(b.id);
