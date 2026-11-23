@@ -11,6 +11,42 @@ const Utils = {
 
   setSeed(seed) {
     this.seed = seed;
+    // IDs are derived from the seed + a counter, so reset the counter too:
+    // two runs with the same seed must produce the same villager/village IDs.
+    this._idCounter = 0;
+  },
+
+  // mulberry32 — a small, fast, seedable PRNG (deterministic per seed).
+  // Returns a fresh Math.random-compatible function; does not touch Utils' LCG.
+  createSeededRandom(seed) {
+    let a = seed >>> 0;
+    return function seededRandom() {
+      a |= 0;
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  },
+
+  // Replace the global Math.random with a seeded stream (headless/benchmark
+  // mode only). Sim code calls Math.random directly in ~46 places (raid
+  // combat, secrets, chronicle picks, wandering, ...), so seeding Utils
+  // alone does not make runs reproducible. Call restoreMathRandom() to
+  // hand the real Math.random back (e.g. when leaving headless mode).
+  seedMathRandom(seed) {
+    if (!this._originalMathRandom) {
+      this._originalMathRandom = Math.random;
+    }
+    Math.random = this.createSeededRandom(seed);
+    return Math.random;
+  },
+
+  restoreMathRandom() {
+    if (this._originalMathRandom) {
+      Math.random = this._originalMathRandom;
+      this._originalMathRandom = null;
+    }
   },
 
   // Unseeded RNG for optional non-deterministic uses (combat/UI)

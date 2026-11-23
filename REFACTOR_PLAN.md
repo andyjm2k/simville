@@ -2,9 +2,11 @@
 
 **Scope:** Full review of `src/` against `SPEC.md` (v1.1.0 multi-village)  
 **Stack:** Electron 28 + vanilla JS (Canvas) + OpenAI-compatible LLM  
-**Primary hotspot:** `src/renderer/js/game.js` (~4115 lines, god object)
+**Primary hotspot:** `src/renderer/js/game.js` (~5,644 lines, god object)
 
 **Execution status (branch `cursor/execute-refactor-plan-dc17`):** Phases 0–5 implemented. Unit tests via `npm test` cover Economy, RaidSystem, DiplomacySystem, and seeded Utils.
+
+> **Status (November 2026, verified at HEAD `bf20486` + fix-first-batch):** this plan describes the codebase *before* Phases 0–5. The executive-summary table and Phase 0 items below are **fixed at HEAD** — see the `Fixed:` notes. Do not re-fix them. Phase 1–3 items carry their own status notes where verified; anything without a note was not re-verified and should be checked against the code before acting on it.
 
 This document identifies **implemented features that should be refactored** because they are not fit for purpose, not optimized, or not fully implemented. It is ordered by severity and proposed work phases.
 
@@ -14,16 +16,18 @@ This document identifies **implemented features that should be refactored** beca
 
 The game has a playable core loop (worldgen, day/night, villagers, build menu, LLM tick with fallbacks, chronicle UI, family systems). Several **flagship features from SPEC acceptance (§20)** are present as scaffolding but broken or dual-wired:
 
-| System | Surface appearance | Runtime reality |
-|--------|--------------------|-----------------|
-| Multi-village economy | `Village.resources` + HUD | Harvest/eat/build use orphan `Game.resources` |
-| War / raids / conquest | Phase machine + chronicle | Failed raids never exit; conquest baseline wrong |
-| Village assignment | Two centers, two names | Most villagers stuck on village 0; 2nd chieftan mis-assigned |
-| Secrets / gossip | Creation + LLM helpers | Gossip never called; discovery ≈ affairs only |
-| Rituals / seasons | Constants + some hooks | Wrong timing; missing types; cosmetics only |
-| Tech tree | LLM decisions + progress | `hasTech()` never gates gameplay |
-| World seed | `setSeed` / `seededRandom` | All `Utils.random*` use `Math.random()` |
-| Pixel art / audio | Settings toggles | Rects + emoji; no `audio.js` |
+> **Fixed at HEAD (Nov 2026):** every row below marked `Fixed` was verified fixed in the Nov 2026 review / fix-first-batch. The table is retained as the pre-refactor record.
+
+| System | Surface appearance | Runtime reality | Status |
+|--------|--------------------|-----------------|--------|
+| Multi-village economy | `Village.resources` + HUD | Harvest/eat/build use orphan `Game.resources` | **Fixed** — `Economy` is the single source of truth; `Game.getResources()` delegates to it; the legacy orphan pool is only migrated on load for pre-multi-village saves |
+| War / raids / conquest | Phase machine + chronicle | Failed raids never exit; conquest baseline wrong | **Fixed** — `RaidSystem` phase machine with one-shot `combatResolved` guard; failed raids retreat and clear; conquest baseline is snapshotted at village creation / raid start |
+| Village assignment | Two centers, two names | Most villagers stuck on village 0; 2nd chieftan mis-assigned | **Fixed** — nearest-centre assignment, exactly one chieftan per village |
+| Secrets / gossip | Creation + LLM helpers | Gossip never called; discovery ≈ affairs only | **Fixed** — gossip runs on new days and social actions share place knowledge |
+| Rituals / seasons | Constants + some hooks | Wrong timing; missing types; cosmetics only | Not re-verified Nov 2026 |
+| Tech tree | LLM decisions + progress | `hasTech()` never gates gameplay | **Fixed** — `hasTech()` gates agriculture, water, tool crafting and hunting/fishing |
+| World seed | `setSeed` / `seededRandom` | All `Utils.random*` use `Math.random()` | **Fixed** — `Utils.random*` use the seeded LCG; headless mode also seeds `Math.random` (fix-first-batch) so same-seed replicates reproduce |
+| Pixel art / audio | Settings toggles | Rects + emoji; no `audio.js` | Partial — pixel art improved (see §3.9); `audio.js` still does not exist |
 
 **Recommended strategy:** Fix simulation contracts first (economy, raids, assignment, LLM tick bug), harden Electron, then split `game.js`, then deepen incomplete SPEC systems.
 
@@ -34,6 +38,8 @@ The game has a playable core loop (worldgen, day/night, villagers, build menu, L
 These make advertised multi-village / war / LLM behavior actively wrong.
 
 ### 0.1 Unify resource ownership (not fit for purpose)
+
+> **Fixed at HEAD (Nov 2026):** `Economy` is the single source of truth; no `this.resources` on `Game` or `Villager` remains. The legacy orphan pool is only migrated on load for pre-multi-village saves.
 
 **Problem:** Two resource pools. HUD reads `village.resources`; simulation mutates `this.resources` on `Game` (lazily created, not saved).
 
@@ -52,6 +58,8 @@ These make advertised multi-village / war / LLM behavior actively wrong.
 
 ### 0.2 Raid attacking phase one-shot + clear on failure (broken)
 
+> **Fixed at HEAD (Nov 2026):** `RaidSystem.processRaid` is a phase machine with a one-shot `combatResolved` guard; `resolveCombat` always moves to `retreating`. The QA test asserts a failed raid exits attacking into retreating and clears.
+
 **Problem:** In `processRaid` `attacking` case, failure path kills villagers and chronicles but **never** sets phase to retreat or clears `activeRaid`. Combat re-runs every frame until the village is wiped.
 
 **Refactor:**
@@ -60,6 +68,8 @@ These make advertised multi-village / war / LLM behavior actively wrong.
 - Guard with `combatResolved` so `update()` cannot re-resolve.
 
 ### 0.3 Conquest baseline (broken)
+
+> **Fixed at HEAD (Nov 2026):** `originalPopulation` is snapshotted at village creation / raid start and never set after casualties; the conquest threshold is 70% loss.
 
 **Problem:** `evaluateConquest` sets `defender.originalPopulation` **after** casualties → loss ratio ≈ 0 → conquest never fires as designed.
 
@@ -70,6 +80,8 @@ These make advertised multi-village / war / LLM behavior actively wrong.
 
 ### 0.4 `assignVillagersToVillages` rewrite (not fit for purpose)
 
+> **Fixed at HEAD (Nov 2026):** assignment is by nearest centre, guarantees exactly one chieftan per village, and sets `originalPopulation`/`peakPopulation`. The QA test asserts 10 villagers, all assigned, one chieftan each.
+
 **Problem:** Nested loop over villages re-runs assignment; only indices `0–4` → village 0 and index `5` → village 1; indices `6+` unassigned; second chieftan (index 1) goes to village 0; `STARTING_VILLAGERS` computed then ignored; duplicate `villagerIds` pushes.
 
 **Refactor:**
@@ -79,6 +91,8 @@ These make advertised multi-village / war / LLM behavior actively wrong.
 
 ### 0.5 `llmTick` proximity `return` → `continue` (broken)
 
+> **Fixed at HEAD (Nov 2026):** the tick loop uses `continue` correctly. (Related: the social action itself used to report out-of-range interactions as handled — fixed in fix-first-batch to return `{ handled: false, reason: 'out_of_range' }`.)
+
 **Problem:** Too-far interaction uses `return`, aborting the entire tick’s remaining villagers.
 
 **Refactor:** `continue` (or skip only that interaction); keep applying other actions.
@@ -87,14 +101,14 @@ These make advertised multi-village / war / LLM behavior actively wrong.
 
 ## Phase 1 — Security & Electron hardening (high)
 
-| Issue | Location | Refactor |
-|-------|----------|----------|
-| `webSecurity: false` + `disable-web-security` | `main.js` | Remove for production; CSP allowlisting LLM hosts |
-| Path traversal on `game:load` | `main.js` | `basename` + resolve under `savesDir` |
-| SSRF via arbitrary LLM endpoint | `main.js` / renderer fetch | Allowlist schemes/hosts; prefer main-process LLM proxy |
-| API key in renderer + plaintext store | `llm.js`, `electron-store` | IPC proxy; `safeStorage` / keychain |
-| XSS via `innerHTML` + LLM text | `ui.js` | Escape / `textContent` for chronicle, goals, rules |
-| Debug logs of key prefixes / full responses | `llm.js` | Redact; debug flag |
+| Issue | Location | Refactor | Status (Nov 2026) |
+|-------|----------|----------|-------------------|
+| `webSecurity: false` + `disable-web-security` | `main.js` | Remove for production; CSP allowlisting LLM hosts | Not re-verified |
+| Path traversal on `game:load` | `main.js` | `basename` + resolve under `savesDir` | **Fixed** — `main.js:370–385` uses `basename` + `startsWith(savesDir)` |
+| SSRF via arbitrary LLM endpoint | `main.js` / renderer fetch | Allowlist schemes/hosts; prefer main-process LLM proxy | **Partially fixed (fix-first-batch)** — validator in `src/main/llm-endpoint.js` blocks private/loopback/metadata/encoded IPs; UI test routes through the main-process IPC handler with a 15s timeout and `redirect: 'error'`. Remaining: no DNS-resolution check (a hostname resolving to a private IP passes) |
+| API key in renderer + plaintext store | `llm.js`, `electron-store` | IPC proxy; `safeStorage` / keychain | Not fixed — key is still stored in plaintext in `electron-store` (no `encryptionKey`); see review finding 13 |
+| XSS via `innerHTML` + LLM text | `ui.js` | Escape / `textContent` for chronicle, goals, rules | **Fixed** — sampled UI paths escape LLM/user text with `Utils.escapeHtml` |
+| Debug logs of key prefixes / full responses | `llm.js` | Redact; debug flag | Not re-verified |
 
 SPEC claims “API key stored securely” — current store is plaintext JSON.
 
@@ -103,6 +117,8 @@ SPEC claims “API key stored securely” — current store is plaintext JSON.
 ## Phase 2 — Simulation contracts that silently degrade
 
 ### 2.1 Seeded RNG unused (not fit for purpose)
+
+> **Fixed at HEAD + fix-first-batch (Nov 2026):** `Utils.randomInt` / `randomFloat` / `randomElement` / `shuffle` all use the seeded LCG, and headless mode seeds `Math.random` too (`Utils.seedMathRandom`), so same-seed benchmark replicates reproduce (see `tests/unit/benchmark-determinism.test.js`).
 
 `Utils.seededRandom` / `setSeed` exist, but `randomInt` / `randomFloat` / `randomElement` / `shuffle` use `Math.random()`. World seed does not control resources, names, or placement.
 
@@ -156,6 +172,8 @@ Duplicate names break bonds; conquest cleanup uses substring match on village na
 
 ### 3.1 Secrets & gossip (SPEC §13 / §20.7) — Low completeness
 
+> **Status (Nov 2026):** gossip is now wired — `processPlaceGossip()` runs on new days and social actions share place knowledge. Secret discovery beyond affairs was not re-verified.
+
 - ~40% secret chance at backstory; affair discovery only.
 - `llm.generateGossip` never called; no 1–2 hop/day spread; no public knowledge graph.
 
@@ -197,6 +215,8 @@ Detail pane lacks Talk / Assign Task / View. Settings lack audio, end date, init
 
 ### 3.8 Tech tree — Implemented but inert
 
+> **Fixed at HEAD (Nov 2026):** `hasTech()` now gates agriculture, water management, tool crafting and hunting/fishing production. The "never gates" claim below is stale.
+
 Large `constants` + LLM research path; `hasTech()` never gates production/build. Either wire unlocks or quarantine as future (SPEC §22 lists tech as future enhancement — current code overclaims).
 
 ### 3.9 Presentation / audio — Partially improved
@@ -213,6 +233,8 @@ Large `constants` + LLM research path; `hasTech()` never gates production/build.
 - Full 16-bit sprite sheet atlas remains deferred (see Phase priorities).
 
 ### 3.10 Save/load (SPEC §11) — Gaps
+
+> **Status (Nov 2026):** mostly fixed — `Game.resources` no longer exists as an orphan pool, autosave rotation keeps the last 5, and the autosave window (previously easy to miss at high speed) now triggers on the day change (fix-first-batch). `nextChieftanDecision` / `hostileDaysCount` are persisted; `dialog:show-save` is dead IPC (removed in fix-first-batch).
 
 Not persisted: `Game.resources`, `Game.government`, `nextChieftanDecision`, `hostileDaysCount`. No auto-save rotation (last 5). Autosave window easy to miss at high speed. `dialog:show-save` uses `showOpenDialog`.
 

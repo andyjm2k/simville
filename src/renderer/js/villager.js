@@ -191,8 +191,11 @@ class Villager {
   }
 
   updateNeeds(deltaTime, villagers = []) {
-    // Decay rates per game hour
-    const hourFraction = deltaTime / (game?.timeState?.hourDuration || 600); // Assuming 10 min per hour
+    // Decay rates per game hour. Fall back to the real default hour
+    // length (10,000 ms) when game.timeState is absent — the old 600 ms
+    // fallback decayed needs ~16x faster than the live game in tests and
+    // headless callers.
+    const hourFraction = deltaTime / (game?.timeState?.hourDuration || CONSTANTS.TIME.DEFAULT_HOUR_MS);
     const stock = game?.getResources?.(this.villageId);
     const canEat = this.status === CONSTANTS.ACTIVITY.EATING && (stock?.food || 0) > 0;
     const canDrink = this.status === CONSTANTS.ACTIVITY.DRINKING && (stock?.water || 0) > 0;
@@ -969,7 +972,7 @@ class Villager {
 
     if (action.duration) {
       // duration is game-minutes; the countdown subtracts milliseconds
-      const hourMs = game?.timeState?.hourDuration || 10000;
+      const hourMs = game?.timeState?.hourDuration || CONSTANTS.TIME.DEFAULT_HOUR_MS;
       this.activityDuration = action.duration * (hourMs / 60);
     }
 

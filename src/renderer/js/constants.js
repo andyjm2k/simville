@@ -88,6 +88,11 @@ const CONSTANTS = {
 
   // Time
   TIME: {
+    // Default ms per game hour (Game constructor default). Used as the
+    // fallback wherever game.timeState.hourDuration is unavailable, so
+    // needs decay matches the live game instead of running ~16x too fast
+    // (the old fallback was 600 ms).
+    DEFAULT_HOUR_MS: 10000,
     DAWN_START: 6,
     MORNING_START: 8,
     AFTERNOON_START: 12,
@@ -683,6 +688,9 @@ const CONSTANTS = {
   VILLAGE: {
     DEFAULT_RADIUS: 12,
     MIN_DISTANCE_BETWEEN: 30,
+    // Total villagers spawned per village: 1 chieftan + (STARTING_VILLAGERS - 1)
+    // tribespeople (see createInitialVillagers). Settled value — SPEC §4.1,
+    // the config initialPopulation default and the HUD placeholder all say 5.
     STARTING_VILLAGERS: 5,
     NAME_PREFIXES: ['Elder', 'Storm', 'River', 'Stone', 'Iron', 'Golden', 'Shadow', 'Wind', 'Thunder', 'Dawn', 'Mist', 'Ember'],
     NAME_SUFFIXES: ['vale', 'hollow', 'fall', 'peak', 'ridge', 'glen', 'mere', 'fell', 'brook', 'watch', 'haven', 'crest']

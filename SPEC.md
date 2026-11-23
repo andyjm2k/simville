@@ -80,7 +80,9 @@
 ### 4.1 Starting Population
 
 - **1 Chieftan:** The village leader, slightly taller sprite, distinct crown/feathers
-- **5 Tribespeople:** Randomly generated personalities
+- **4 Tribespeople:** Randomly generated personalities
+
+> Starting population is **5 villagers per village** (1 chieftan + 4 tribespeople, 10 total). This is the value `CONSTANTS.VILLAGE.STARTING_VILLAGERS` implements and `createInitialVillagers` spawns; the config default `initialPopulation` and the HUD placeholder agree.
 
 ### 4.2 Villager Attributes
 
@@ -377,7 +379,7 @@ Villagers must manage these needs:
 │ ├─ Day Length: [10] minutes         │
 │ ├─ Start Date: Day 1, Year 1         │
 │ ├─ End Date: [Unlimited ▼]           │
-│ └─ Initial Population: [6 ▼]         │
+│ └─ Initial Population: [5 ▼]         │
 │                                      │
 │ Graphics                              │
 │ ├─ Show Speech Bubbles: [✓]         │
@@ -841,7 +843,7 @@ Output JSON: { goals: [{ type, description, difficulty, milestones }] }
   },
   "simulation": {
     "dayLengthMinutes": 10,
-    "initialPopulation": 6,
+    "initialPopulation": 5,
     "worldSize": 64,
     "endCondition": "unlimited"
   },
@@ -905,7 +907,7 @@ simville/
 - [ ] Game launches without errors on Windows
 - [ ] LLM connection can be configured and tested
 - [ ] World generates with correct biomes and resources
-- [ ] 6 villagers spawn with unique personalities and backstories
+- [ ] 5 villagers spawn per village (10 total) with unique personalities and backstories
 - [ ] Day/night cycle runs continuously
 - [ ] Villagers move, work, and interact in real-time
 - [ ] Speech bubbles appear with correct emojis

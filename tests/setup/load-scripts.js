@@ -330,7 +330,10 @@ export function createHeadlessGame(seed = 424242) {
   const context = loadRendererScripts({ includeGame: true });
 
   Utils.setSeed(seed);
-  Math.random = () => Utils.seededRandom();
+  // Seed Math.random from the same seed (own mulberry32 stream, separate
+  // from Utils' LCG) so sim code calling Math.random directly is
+  // reproducible in tests. initializeHeadless() re-seeds both streams.
+  Utils.seedMathRandom(seed);
 
   const gameInstance = new Game();
   context.__headlessGame = gameInstance;

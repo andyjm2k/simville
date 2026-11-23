@@ -65,8 +65,7 @@
       "shortcutName": "Simville"
     },
     "files": [
-      "src/**/*",
-      "assets/**/*"
+      "src/**/*"
     ],
     "extraResources": [
       {

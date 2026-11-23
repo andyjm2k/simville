@@ -30,7 +30,7 @@ const store = new Store({
     },
     simulation: {
       dayLengthMinutes: 10,
-      initialPopulation: 6,
+      initialPopulation: 5,
       worldSize: 64,
       endCondition: 'unlimited'
     },
@@ -57,57 +57,12 @@ let mainWindow;
 
 log.info('Simville starting...');
 
-function isAllowedLlmEndpoint(endpoint) {
-  if (!endpoint || typeof endpoint !== 'string') {
-    return { ok: false, error: 'Invalid endpoint' };
-  }
+const { isAllowedLlmEndpoint } = require('./llm-endpoint');
 
-  let url;
-  try {
-    url = new URL(endpoint);
-  } catch {
-    return { ok: false, error: 'Invalid endpoint URL' };
-  }
-
-  const scheme = url.protocol.toLowerCase();
-  if (scheme !== 'http:' && scheme !== 'https:') {
-    return { ok: false, error: 'Only http and https endpoints are allowed' };
-  }
-
-  // Reject dangerous schemes if somehow present in nested forms
-  const lower = endpoint.toLowerCase();
-  if (lower.startsWith('file:') || lower.startsWith('javascript:') || lower.startsWith('data:')) {
-    return { ok: false, error: 'Disallowed endpoint scheme' };
-  }
-
-  const hostname = (url.hostname || '').toLowerCase();
-  if (!hostname) {
-    return { ok: false, error: 'Missing hostname' };
-  }
-
-  // Allow localhost / 127.0.0.1 for local LLM servers
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return { ok: true };
-  }
-
-  // Reject bare private IPs (basic SSRF guard); hostname names are allowed
-  const ipv4 = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (ipv4) {
-    const a = Number(ipv4[1]);
-    const b = Number(ipv4[2]);
-    if (a === 10) {
-      return { ok: false, error: 'Private IP endpoints are not allowed' };
-    }
-    if (a === 192 && b === 168) {
-      return { ok: false, error: 'Private IP endpoints are not allowed' };
-    }
-    if (a === 127) {
-      return { ok: false, error: 'Use localhost or 127.0.0.1 for local models' };
-    }
-  }
-
-  return { ok: true };
-}
+// Timeout for the LLM test-connection probe (ms). The renderer never
+// fetches an endpoint directly — see llm.js testConnection(), which routes
+// through the llm:test-connection IPC handler below.
+const LLM_TEST_CONNECTION_TIMEOUT_MS = 15000;
 
 function rotateAutosaves(savesDir, justSavedFilename) {
   if (!justSavedFilename || !String(justSavedFilename).startsWith('save_')) {
@@ -304,15 +259,24 @@ ipcMain.handle('config:getAll', () => {
   return store.store;
 });
 
-// Test LLM connection
+// Test LLM connection — the only place an endpoint is fetched. The
+// endpoint is validated first (see src/main/llm-endpoint.js), the fetch
+// has a timeout and refuses redirects, so a public URL cannot be bounced
+// to an internal address.
 ipcMain.handle('llm:test-connection', async (event, config) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    LLM_TEST_CONNECTION_TIMEOUT_MS
+  );
   try {
     const allow = isAllowedLlmEndpoint(config?.endpoint);
     if (!allow.ok) {
       return { success: false, error: allow.error };
     }
 
-    const response = await fetch(`${config.endpoint}/chat/completions`, {
+    const baseUrl = String(config.endpoint).replace(/\/$/, '');
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -323,7 +287,9 @@ ipcMain.handle('llm:test-connection', async (event, config) => {
         messages: [{ role: 'user', content: 'Hello, respond with "Connection successful" only.' }],
         max_tokens: 50,
         temperature: 0
-      })
+      }),
+      signal: controller.signal,
+      redirect: 'error'
     });
 
     if (!response.ok) {
@@ -332,9 +298,14 @@ ipcMain.handle('llm:test-connection', async (event, config) => {
     }
 
     const data = await response.json();
-    return { success: true, message: data.choices[0].message.content };
+    return { success: true, message: data.choices?.[0]?.message?.content ?? '' };
   } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { success: false, error: `Connection test timed out after ${LLM_TEST_CONNECTION_TIMEOUT_MS / 1000}s` };
+    }
     return { success: false, error: error.message };
+  } finally {
+    clearTimeout(timeoutId);
   }
 });
 
@@ -398,15 +369,6 @@ ipcMain.handle('game:list-saves', async () => {
     log.error('List saves failed:', error);
     return [];
   }
-});
-
-// Show save dialog
-ipcMain.handle('dialog:show-save', async () => {
-  const result = await dialog.showSaveDialog(mainWindow, {
-    filters: [{ name: 'Simville Saves', extensions: ['json'] }],
-    defaultPath: path.join(app.getPath('userData'), 'saves', 'save.json')
-  });
-  return result;
 });
 
 // App lifecycle

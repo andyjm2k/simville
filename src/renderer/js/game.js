@@ -304,10 +304,15 @@ class Game {
     villager.applyAction(socialAction);
     this.beginSocializing(villager, partner);
 
-    if (!partner) return { handled: true };
+    // The villager starts walking to the partner (beginSocializing above),
+    // but no relationship effect is applied until they are in range — so
+    // report honestly instead of claiming the interaction succeeded.
+    if (!partner) return { handled: false, reason: 'no_partner' };
 
     const dist = Utils.distance(villager.x, villager.y, partner.x, partner.y);
-    if (dist > this.getSocialRange()) return { handled: true };
+    if (dist > this.getSocialRange()) {
+      return { handled: false, reason: 'out_of_range', distance: dist, range: this.getSocialRange() };
+    }
 
     let notable = null;
     if (this.socialSystem) {
@@ -1232,6 +1237,20 @@ class Game {
     this.constructionAccumulator = 0;
     this.goalAccumulator = 0;
 
+    // Full reset: counters/accumulators and queues from the previous world
+    // must not carry over, or the first autosave fires on a stale day,
+    // chronicle greetings run on a stale tick cadence, and a stale
+    // simulation report survives into the new world.
+    this.tickCount = 0;
+    this.tickAccumulator = 0;
+    this.survivalAccumulator = 0;
+    this.techDecisionAccumulator = 0;
+    this.lastAutoSaveDay = 0;
+    this.eventQueue = [];
+    this.benchmarkEvents = [];
+    this.simulationReport = null;
+    this.isGeneratingActions = false;
+
     // Per-village chronicles start fresh
     this.villages.forEach(village => {
       village.chronicle = village.createDefaultChronicle();
@@ -1271,49 +1290,55 @@ class Game {
     this.ui.updateTribeSelector(this.villages, this.hudVillageId);
   }
 
+  // Backstories/goals/secrets are generated per villager, in batches of
+  // 4 in flight at a time (was: up to 30 fully serial LLM calls before
+  // the village felt alive). Local LLM servers serialise requests in
+  // LLMManager's queue anyway; the cap mainly helps remote endpoints.
+  // Fire-and-forget from newWorld(): backstories trickle in as they land.
   async generateInitialBackstories() {
-    console.log('generateInitialBackstories: Starting with', this.villagers.length, 'villagers');
-    for (const villager of this.villagers) {
-      try {
-        console.log('generateInitialBackstories: Processing', villager.name);
-        if (!villager.backstory) {
-          villager.backstory = llm.generateFallbackBackstory(villager);
-          this.refreshSelectedVillagerNarrative(villager);
-        }
+    const BATCH_SIZE = 4;
+    for (let i = 0; i < this.villagers.length; i += BATCH_SIZE) {
+      await Promise.all(
+        this.villagers.slice(i, i + BATCH_SIZE).map((v) => this.generateVillagerBackstory(v))
+      );
+    }
+  }
 
-        const generatedBackstory = await llm.generateBackstory(villager);
-        if (generatedBackstory) {
-          villager.backstory = generatedBackstory;
-          this.refreshSelectedVillagerNarrative(villager);
-        }
-        console.log('  Got backstory for', villager.name, '- length:', villager.backstory?.length);
-        villager.goals = this.normalizeGoals(await llm.generateGoals(villager), villager);
-        this.refreshSelectedVillagerNarrative(villager);
-        console.log('  Got goals for', villager.name);
-
-        // Generate a secret for some villagers (LLM or deterministic fallback)
-        if (Math.random() < 0.4) {
-          const otherVillagers = this.villagers.filter(v => v.id !== villager.id);
-          const secret = await llm.generateSecret(villager, otherVillagers);
-          if (secret) {
-            villager.secrets.push(secret);
-            this.refreshSelectedVillagerNarrative(villager);
-          }
-        }
-        console.log('  After processing, villagers.length:', this.villagers.length);
-      } catch (error) {
-        console.error('Failed to generate backstory for', villager.name, error);
-        // Use fallback values to prevent game state corruption
-        villager.backstory = villager.backstory || llm.generateFallbackBackstory(villager);
-        villager.goals = this.normalizeGoals(villager.goals?.length ? villager.goals : this.getFallbackGoals(villager), villager);
-        if ((!villager.secrets || villager.secrets.length === 0) && Math.random() < 0.4) {
-          const otherVillagers = this.villagers.filter(v => v.id !== villager.id);
-          villager.secrets = [llm.generateFallbackSecret(villager, otherVillagers)];
-        }
+  async generateVillagerBackstory(villager) {
+    try {
+      if (!villager.backstory) {
+        villager.backstory = llm.generateFallbackBackstory(villager);
         this.refreshSelectedVillagerNarrative(villager);
       }
+
+      const generatedBackstory = await llm.generateBackstory(villager);
+      if (generatedBackstory) {
+        villager.backstory = generatedBackstory;
+        this.refreshSelectedVillagerNarrative(villager);
+      }
+      villager.goals = this.normalizeGoals(await llm.generateGoals(villager), villager);
+      this.refreshSelectedVillagerNarrative(villager);
+
+      // Generate a secret for some villagers (LLM or deterministic fallback)
+      if (Math.random() < 0.4) {
+        const otherVillagers = this.villagers.filter(v => v.id !== villager.id);
+        const secret = await llm.generateSecret(villager, otherVillagers);
+        if (secret) {
+          villager.secrets.push(secret);
+          this.refreshSelectedVillagerNarrative(villager);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to generate backstory for', villager.name, error);
+      // Use fallback values to prevent game state corruption
+      villager.backstory = villager.backstory || llm.generateFallbackBackstory(villager);
+      villager.goals = this.normalizeGoals(villager.goals?.length ? villager.goals : this.getFallbackGoals(villager), villager);
+      if ((!villager.secrets || villager.secrets.length === 0) && Math.random() < 0.4) {
+        const otherVillagers = this.villagers.filter(v => v.id !== villager.id);
+        villager.secrets = [llm.generateFallbackSecret(villager, otherVillagers)];
+      }
+      this.refreshSelectedVillagerNarrative(villager);
     }
-    console.log('generateInitialBackstories: Done, final villagers.length:', this.villagers.length);
   }
 
   refreshSelectedVillagerNarrative(villager) {
@@ -1739,10 +1764,11 @@ class Game {
     this.ui.updateHUD(this.timeState, this.getHudResources(), this.paused, this.villages, this.getSelectedVillage());
     this.checkExtinction();
 
-    // Auto-save once near the start of each in-game day.
-    if (this.timeState.day !== this.lastAutoSaveDay &&
-        Math.floor(this.timeState.hours) === 0 &&
-        this.timeState.hours < 0.1) {
+    // Auto-save once per in-game day. Trigger on the day change itself:
+    // the old `hours < 0.1` window was only ~0.1 game-hours wide, so a
+    // large frame delta (tab switch, slow frame, high sim speed) could
+    // jump past it and skip that day's autosave entirely.
+    if (this.timeState.day !== this.lastAutoSaveDay) {
       this.lastAutoSaveDay = this.timeState.day;
       this.autoSave();
     }
@@ -2990,6 +3016,10 @@ class Game {
 
     const seed = options.seed ?? 4242;
     Utils.setSeed(seed);
+    // Seed Math.random too: sim code calls it directly in ~46 places (raid
+    // combat, secrets, chronicle picks, wandering), so seeding Utils alone
+    // does not make same-seed replicates reproducible.
+    Utils.seedMathRandom(seed);
 
     const dayLengthMs = options.dayLengthMs || 60000;
     this.timeState.hourDuration = dayLengthMs / 24;
@@ -3196,6 +3226,11 @@ class Game {
   startScheduledAction(villager, action, notableEvents = null) {
     const socialResult = this.applySocialVillagerAction(villager, action);
     if (socialResult) {
+      // A social result — even { handled: false, reason: 'out_of_range' } —
+      // means the social action was started (the villager is walking to the
+      // partner); it must not fall through to villager.applyAction, which
+      // applySocialVillagerAction already ran. No relationship effect was
+      // applied out of range, and the result says so.
       if (socialResult.notable && notableEvents) notableEvents.push(socialResult.notable);
       return;
     }
@@ -5490,6 +5525,10 @@ Respond with JSON: {
       nextChieftanDecision: this.nextChieftanDecision,
       hostileDaysCount: this.hostileDaysCount,
       hudVillageId: this.hudVillageId,
+      // Counters that drive behaviour (autosave day, chronicle cadence);
+      // loadGame() restores them, older saves omit them (defaults to 0).
+      tickCount: this.tickCount,
+      lastAutoSaveDay: this.lastAutoSaveDay,
       savedAt: Date.now()
     };
 
@@ -5566,6 +5605,20 @@ Respond with JSON: {
 
       // Restore time
       this.timeState = saveData.timeState;
+
+      // Restore the counters that drive behaviour (autosave day, chronicle
+      // cadence); older saves omit them, so default to 0. Accumulators and
+      // queues never carry over from the previous session.
+      this.tickCount = saveData.tickCount ?? 0;
+      this.lastAutoSaveDay = saveData.lastAutoSaveDay ?? 0;
+      this.tickAccumulator = 0;
+      this.survivalAccumulator = 0;
+      this.techDecisionAccumulator = 0;
+      this.goalAccumulator = 0;
+      this.eventQueue = [];
+      this.benchmarkEvents = [];
+      this.simulationReport = null;
+      this.isGeneratingActions = false;
 
       // Restore per-village chronicle/tech (migrate legacy global saves)
       this.villages.forEach((village, index) => {

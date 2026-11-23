@@ -6,9 +6,14 @@ Comprehensive test suite covering all core systems and newly added features for 
 
 ## Test Statistics
 
-**Total Test Suites:** 7  
-**Total Tests:** 159  
-**Pass Rate:** 100%
+> **Refreshed November 2026 (HEAD `bf20486` + fix-first-batch).** The old figures below (7 suites, 159 tests, 100% pass) described the pre-refactor suite and are stale — do not use them.
+
+**Vitest suites:** 31 files — 21 in `tests/unit/`, 10 in `tests/qa/`  
+**Vitest tests:** 235 `it()` cases (193 unit + 42 QA, counted by `grep` Nov 2026)  
+**Standalone suites:** 7 `tests/test-*.js` scripts + `tests/run-unit-tests.js`, run via `npm test`'s second leg (`node tests/run-all-tests.js`) — per-suite counts are the repo's own, listed below  
+**Pass rate:** not re-verified here — no test suite was executed during the Nov 2026 review; run `npm test` locally to confirm
+
+**Line counts (Nov 2026):** `game.js` 5,644 lines, `ui.js` 1,376, `villager.js` 1,299, `world.js` 1,314.
 
 ## Test Suites
 
@@ -97,13 +102,17 @@ npm test
 
 ### Run Specific Test Suite
 ```bash
-npm run test:core         # Core systems
-npm run test:batch        # Batch runner
-npm run test:monitor      # Progress monitor
-npm run test:failure      # Failure handler
-npm run test:report       # Report generator
-npm run test:analysis     # Benchmark analysis
-npm run test:visualizer   # Visualizer
+npm run test:unit        # Vitest unit tests only (tests/unit)
+npm run test:qa          # Vitest QA tests only (tests/qa)
+npm run test:systems     # Node VM harness (Economy/Raid/Diplomacy/Benchmark)
+npm run test:batch       # Batch runner suite
+npm run test:monitor     # Progress monitor suite
+npm run test:failure     # Failure handler suite
+npm run test:report      # Report generator suite
+npm run test:analysis    # Benchmark analysis suite
+npm run test:visualizer  # Visualizer suite
+npm run test:metrics     # Advanced metrics suite
+npm run test:regression  # QA harness regression mode
 ```
 
 ### Run Tests Matching Pattern
